@@ -1,4 +1,3 @@
-[documentation.php](https://github.com/user-attachments/files/25686006/documentation.php)
 <!DOCTYPE html>
 <html>
 <head>
@@ -89,6 +88,26 @@
         .toc li {
             margin: 10px 0;
         }
+        .admin-section {
+            background: #e8f4fd;
+            border-left: 4px solid #0e1f4c;
+            padding: 20px;
+            margin: 30px 0;
+            border-radius: 8px;
+        }
+        .admin-section h3 {
+            margin-top: 0;
+            color: #0e1f4c;
+        }
+        .badge {
+            display: inline-block;
+            padding: 3px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: bold;
+        }
+        .badge-admin { background: #0e1f4c; color: white; }
+        .badge-feature { background: #28a745; color: white; }
     </style>
 </head>
 <body>
@@ -96,10 +115,10 @@
 <!-- PAGE DE GARDE -->
 <div style="text-align: center; margin-bottom: 60px;">
     <h1 style="font-size: 48px; border-bottom: none;">📚 GESTION ACCÈS</h1>
-    <h2 style="border-left: none; font-size: 32px;">Documentation Technique</h2>
+    <h2 style="border-left: none; font-size: 32px;">Documentation Technique & Guide d'utilisation</h2>
     <p style="font-size: 18px; color: #666;">Lycée Bel Air - Système de gestion des accès et des présences</p>
     <hr style="margin: 40px 0;">
-    <p><strong>Version :</strong> 2.0</p>
+    <p><strong>Version :</strong> 3.0</p>
     <p><strong>Date :</strong> <?= date('d/m/Y') ?></p>
     <p><strong>Auteur :</strong> Équipe technique</p>
 </div>
@@ -114,10 +133,12 @@
         <li><a href="#installation">Installation et configuration</a></li>
         <li><a href="#arborescence">Arborescence des fichiers</a></li>
         <li><a href="#fonctionnalites">Fonctionnalités détaillées</a></li>
-        <li><a href="#utilisation">Guide d'utilisation</a></li>
+        <li><a href="#interface-admin">Interface Administrateur Global</a></li>
+        <li><a href="#utilisation">Guide d'utilisation par rôle</a></li>
         <li><a href="#securite">Sécurité et logs</a></li>
         <li><a href="#maintenance">Maintenance</a></li>
         <li><a href="#depannage">Dépannage</a></li>
+        <li><a href="#annexes">Annexes</a></li>
     </ol>
 </div>
 
@@ -135,6 +156,8 @@
     <li>Gérer les emplois du temps et l'assignation des salles</li>
     <li>Historiser les accès et incidents (logs Vigipirate)</li>
     <li>Administrer les utilisateurs, classes et statuts</li>
+    <li><strong>NOUVEAU :</strong> Interface d'administration globale centralisée</li>
+    <li><strong>NOUVEAU :</strong> Scan QR code pour recherche rapide de livres</li>
 </ul>
 
 <!-- 2. ARCHITECTURE -->
@@ -169,7 +192,7 @@
     </tr>
     <tr>
         <td>Bibliothèques</td>
-        <td>Chart.js, PDO</td>
+        <td>Chart.js, html5-qrcode, FontAwesome</td>
         <td>-</td>
     </tr>
 </table>
@@ -184,10 +207,12 @@ gestion_acces/
 ├── pages/                     # Pages de l'application
 │   ├── accueil.php           # Tableau de bord
 │   ├── admin.php              # Gestion des élèves
+│   ├── admin_global.php       # ⭐ NOUVEAU - Administration globale
 │   ├── edt.php                # Emploi du temps
 │   ├── preappel.php           # Système d'appel
 │   ├── logs.php               # Journal des accès
 │   ├── gestion_edt.php        # Admin - Gestion EDT
+│   ├── gestion_bibliotheque.php # Gestion bibliothèque avec QR
 │   └── *.php                  # Autres pages
 ├── assets/                    # Ressources statiques
 │   └── css/                   # Feuilles de style
@@ -208,12 +233,12 @@ gestion_acces/
     </tr>
     <tr>
         <td><code>utilisateur</code></td>
-        <td>Stocke tous les utilisateurs (élèves, profs, admins)</td>
+        <td>Stocke tous les utilisateurs</td>
         <td>→ statut, classe, badge</td>
     </tr>
     <tr>
         <td><code>statut</code></td>
-        <td>Définit les rôles (1=Admin, 3=Utilisateur, 4=Eleve)</td>
+        <td>Définit les rôles (1=Admin, 2=Technicien, 3=Professeur, 4=Élève, 5=Documentaliste)</td>
         <td>← utilisateur</td>
     </tr>
     <tr>
@@ -247,44 +272,16 @@ gestion_acces/
         <td>→ utilisateur</td>
     </tr>
     <tr>
-        <td><code>entrer_badge</code></td>
-        <td>Enregistrement des passages badge</td>
-        <td>→ badge, journal_entrer</td>
+        <td><code>ouvrage</code></td>
+        <td>Catalogue des livres</td>
+        <td>← exemplaire, etre</td>
+    </tr>
+    <tr>
+        <td><code>pret</code></td>
+        <td>Gestion des emprunts</td>
+        <td>→ etre, realiser</td>
     </tr>
 </table>
-
-<h3>3.2 Schéma relationnel</h3>
-<pre>
-utilisateur ─┬─> statut
-             ├─> classe
-             └─> badge ──> entrer_badge ──> journal_entrer
-             
-emploie_du_temps ─┬─> classe
-                  ├─> cours
-                  ├─> jours
-                  └─> salle_edt ──> salle
-                  
-logs_systeme ──> utilisateur
-</pre>
-
-<h3>3.3 Table logs_systeme</h3>
-<p>Table créée automatiquement pour l'historisation :</p>
-<pre>
-CREATE TABLE logs_systeme (
-    id_log INT AUTO_INCREMENT PRIMARY KEY,
-    date_log DATETIME DEFAULT CURRENT_TIMESTAMP,
-    niveau ENUM('info', 'warning', 'error', 'critical') DEFAULT 'info',
-    type_action VARCHAR(50),
-    id_utilisateur INT NULL,
-    ip_address VARCHAR(45),
-    user_agent TEXT,
-    description TEXT,
-    details TEXT,
-    INDEX idx_date (date_log),
-    INDEX idx_niveau (niveau),
-    INDEX idx_type (type_action)
-);
-</pre>
 
 <!-- 4. INSTALLATION -->
 <h2 id="installation">4. Installation et configuration</h2>
@@ -294,7 +291,7 @@ CREATE TABLE logs_systeme (
     <li>WampServer, XAMPP ou MAMP</li>
     <li>PHP 8.0 ou supérieur</li>
     <li>MySQL 5.7 ou supérieur</li>
-    <li>Navigateur web moderne</li>
+    <li>Navigateur web moderne avec support caméra (pour scan QR)</li>
 </ul>
 
 <h3>4.2 Installation étape par étape</h3>
@@ -345,171 +342,193 @@ Admin :
     Mot de passe : mdp123
 </pre>
 
-<!-- 5. ARBORESCENCE DÉTAILLÉE -->
-<h2 id="arborescence">5. Arborescence détaillée</h2>
+<!-- 5. FONCTIONNALITÉS -->
+<h2 id="fonctionnalites">5. Fonctionnalités détaillées</h2>
 
-<h3>5.1 Racine du projet</h3>
-<table>
-    <tr>
-        <th>Fichier</th>
-        <th>Description</th>
-    </tr>
-    <tr>
-        <td><code>index.php</code></td>
-        <td>Page de connexion, gère l'authentification et les logs de connexion</td>
-    </tr>
-</table>
-
-<h3>5.2 Dossier includes/</h3>
-<table>
-    <tr>
-        <th>Fichier</th>
-        <th>Description</th>
-    </tr>
-    <tr>
-        <td><code>db.php</code></td>
-        <td>Connexion PDO à la base + fonction <code>addLog()</code> pour les logs</td>
-    </tr>
-    <tr>
-        <td><code>sidebar.php</code></td>
-        <td>Menu latéral adapté au statut de l'utilisateur</td>
-    </tr>
-</table>
-
-<h3>5.3 Dossier pages/</h3>
-<table>
-    <tr>
-        <th>Fichier</th>
-        <th>Accès</th>
-        <th>Description</th>
-    </tr>
-    <tr>
-        <td><code>accueil.php</code></td>
-        <td>Tous</td>
-        <td>Tableau de bord personnalisé selon le rôle</td>
-    </tr>
-    <tr>
-        <td><code>admin.php</code></td>
-        <td>Admin (1)</td>
-        <td>Gestion complète des élèves (CRUD, filtres, export)</td>
-    </tr>
-    <tr>
-        <td><code>edt.php</code></td>
-        <td>Tous</td>
-        <td>Emploi du temps (classe pour élève, matières pour prof)</td>
-    </tr>
-    <tr>
-        <td><code>preappel.php</code></td>
-        <td>Prof (3) et Admin</td>
-        <td>Système d'appel automatisé avec détection badges</td>
-    </tr>
-    <tr>
-        <td><code>logs.php</code></td>
-        <td>Admin (1)</td>
-        <td>Journal des accès, graphiques, export, purge</td>
-    </tr>
-    <tr>
-        <td><code>gestion_edt.php</code></td>
-        <td>Admin (1)</td>
-        <td>Gestion des emplois du temps et assignation salles</td>
-    </tr>
-    <tr>
-        <td><code>technicien.php</code></td>
-        <td>Technicien (2)</td>
-        <td>Espace technicien (à développer)</td>
-    </tr>
-</table>
-
-<!-- 6. FONCTIONNALITÉS -->
-<h2 id="fonctionnalites">6. Fonctionnalités détaillées</h2>
-
-<h3>6.1 Système de connexion</h3>
-<ul>
-    <li>Authentification par identifiant/mot de passe</li>
-    <li>Vérification avec <code>password_verify()</code></li>
-    <li>Session utilisateur avec rôle (id_statut)</li>
-    <li>Logs automatiques des tentatives (réussies/échouées)</li>
-</ul>
-
-<h3>6.2 Gestion des élèves (admin.php)</h3>
+<h3>5.1 Gestion des élèves (admin.php)</h3>
 <ul>
     <li><strong>CRUD complet :</strong> Ajouter, modifier, supprimer des élèves</li>
     <li><strong>Recherche :</strong> Par nom, prénom, identifiant, classe</li>
     <li><strong>Filtres :</strong> Par classe (toutes les classes affichées, même vides)</li>
     <li><strong>Export CSV :</strong> Téléchargement de la liste</li>
-    <li><strong>Assignation classe :</strong> Modal pour élèves sans classe</li>
 </ul>
 
-<h3>6.3 Emploi du temps (edt.php)</h3>
+<h3>5.2 Emploi du temps (edt.php)</h3>
 <ul>
     <li><strong>Élève :</strong> Affiche l'EDT de sa classe</li>
     <li><strong>Professeur :</strong> Affiche ses cours selon ses matières</li>
     <li><strong>Admin :</strong> Vue complète avec salles</li>
     <li><strong>Cours en cours :</strong> Mise en évidence du cours actuel</li>
-    <li><strong>Salles :</strong> Affichage des salles assignées</li>
 </ul>
 
-<h3>6.4 Préappel automatisé (preappel.php)</h3>
+<h3>5.3 Préappel automatisé (preappel.php)</h3>
 <ul>
     <li><strong>Détection badges :</strong> Affiche les badges scannés récemment</li>
     <li><strong>Cours du jour :</strong> Liste des cours du professeur</li>
     <li><strong>Appel :</strong> Interface de validation des présences</li>
     <li><strong>Timer Arduino :</strong> Simulation des 2 minutes de validation</li>
-    <li><strong>Journalisation :</strong> Enregistrement dans logs_systeme</li>
 </ul>
 
-<h3>6.5 Logs système (logs.php)</h3>
+<h3>5.4 Logs système (logs.php)</h3>
 <ul>
     <li><strong>Visualisation :</strong> Tableau avec tous les logs</li>
     <li><strong>Filtres :</strong> Par date, niveau, type, recherche texte</li>
     <li><strong>Graphiques :</strong> Activité par jour, top actions</li>
     <li><strong>Export CSV :</strong> Sauvegarde des logs</li>
-    <li><strong>Purge :</strong> Nettoyage des logs anciens</li>
-    <li><strong>Détails :</strong> Modal avec informations complètes</li>
 </ul>
 
-<h3>6.6 Gestion EDT (gestion_edt.php)</h3>
+<h3>5.5 Bibliothèque avec scan QR (gestion_bibliotheque.php)</h3>
 <ul>
-    <li><strong>4 onglets :</strong> Salles, EDT, Assignation, Import/Export</li>
-    <li><strong>Gestion salles :</strong> Ajout/modification/suppression</li>
-    <li><strong>Gestion cours :</strong> Ajout aux classes</li>
-    <li><strong>Assignation :</strong> Lier une salle à un cours</li>
+    <li><strong>Scan QR code :</strong> Recherche instantanée par code barre</li>
+    <li><strong>Gestion des prêts :</strong> Emprunt, retour, prolongation</li>
+    <li><strong>Réservations :</strong> Mise de côté des livres</li>
+    <li><strong>Statistiques :</strong> Livres disponibles, prêts en retard</li>
 </ul>
 
-<!-- 7. UTILISATION -->
-<h2 id="utilisation">7. Guide d'utilisation</h2>
+<!-- 6. INTERFACE ADMINISTRATEUR GLOBAL -->
+<h2 id="interface-admin">6. Interface Administrateur Global</h2>
 
-<h3>7.1 Pour les administrateurs</h3>
-<div class="info-box">
-    <strong>🔑 Connexion :</strong> Utiliser un compte avec id_statut = 1
-</div>
-<ol>
-    <li><strong>Tableau de bord</strong> - Vue d'ensemble des statistiques</li>
-    <li><strong>Gestion élèves</strong> - Ajouter/modifier/supprimer des élèves</li>
-    <li><strong>Emploi du temps</strong> - Voir tous les EDT</li>
-    <li><strong>Gestion EDT</strong> - Configurer les cours et salles</li>
-    <li><strong>Préappel</strong> - Tester le système (optionnel)</li>
-    <li><strong>Logs</strong> - Surveiller les accès et incidents</li>
-</ol>
+<div class="admin-section">
+    <h3>👑 admin_global.php - Vue d'ensemble</h3>
+    <p><span class="badge badge-admin">Admin uniquement</span> <span class="badge badge-feature">Nouveauté v3.0</span></p>
+    
+    <h4>6.1 Tableau de bord</h4>
+    <ul>
+        <li><strong>Statistiques globales :</strong> Utilisateurs, livres, badges, cours</li>
+        <li><strong>Graphiques :</strong> Activité récente, répartition des utilisateurs</li>
+        <li><strong>Effectifs :</strong> Nombre d'élèves par classe</li>
+        <li><strong>Derniers inscrits :</strong> Liste des 5 derniers utilisateurs</li>
+    </ul>
 
-<h3>7.2 Pour les professeurs</h3>
-<div class="info-box">
-    <strong>🔑 Connexion :</strong> Compte avec id_statut = 3
-</div>
-<ol>
-    <li><strong>Tableau de bord</strong> - Infos personnelles</li>
-    <li><strong>Emploi du temps</strong> - Ses cours avec salles</li>
-    <li><strong>Préappel</strong> - Faire l'appel de ses classes</li>
-</ol>
+    <h4>6.2 Gestion des utilisateurs</h4>
+    <ul>
+        <li><strong>Ajout :</strong> Formulaire complet avec choix du statut et de la classe</li>
+        <li><strong>Liste :</strong> Tableau avec tous les utilisateurs et leurs droits</li>
+        <li><strong>Actions :</strong> Modifier, supprimer (sauf son propre compte)</li>
+        <li><strong>Filtres :</strong> Par statut, par classe, recherche</li>
+    </ul>
 
-<h3>7.3 Pour les élèves</h3>
-<div class="info-box">
-    <strong>🔑 Connexion :</strong> Compte avec id_statut = 4
+    <h4>6.3 Gestion des badges</h4>
+    <ul>
+        <li><strong>Attribution :</strong> Lier un badge à un utilisateur</li>
+        <li><strong>Expiration :</strong> Suivi des dates de validité</li>
+        <li><strong>État :</strong> Actif, inactif, perdu</li>
+        <li><strong>Statut :</strong> Badges valides/expirés</li>
+    </ul>
+
+    <h4>6.4 Gestion des classes</h4>
+    <ul>
+        <li><strong>Liste :</strong> Toutes les classes avec effectifs</li>
+        <li><strong>Niveaux :</strong> Association année (1ère/2ème année)</li>
+        <li><strong>Actions rapides :</strong> Voir l'emploi du temps de la classe</li>
+    </ul>
+
+    <h4>6.5 Logs système</h4>
+    <ul>
+        <li><strong>Vue condensée :</strong> 50 derniers logs</li>
+        <li><strong>Accès rapide :</strong> Lien vers la page complète des logs</li>
+        <li><strong>Filtrage :</strong> Par niveau, type, utilisateur</li>
+    </ul>
+
+    <h4>6.6 Configuration générale</h4>
+    <ul>
+        <li><strong>Paramètres :</strong> Durée des prêts, validité des badges, délai de retard</li>
+        <li><strong>Sécurité :</strong> Journalisation, mots de passe forts, expiration session</li>
+        <li><strong>Informations système :</strong> Versions PHP/MySQL, espace disque</li>
+    </ul>
 </div>
-<ol>
-    <li><strong>Tableau de bord</strong> - Infos personnelles, classe</li>
-    <li><strong>Emploi du temps</strong> - EDT de sa classe</li>
-</ol>
+
+<!-- 7. GUIDE D'UTILISATION PAR RÔLE -->
+<h2 id="utilisation">7. Guide d'utilisation par rôle</h2>
+
+<h3>7.1 Administrateur</h3>
+<div class="info-box">
+    <strong>Accès :</strong> Toutes les pages
+</div>
+<table>
+    <tr>
+        <th>Page</th>
+        <th>Action principale</th>
+        <th>Fréquence</th>
+    </tr>
+    <tr>
+        <td>admin_global.php</td>
+        <td>Vue d'ensemble, gestion utilisateurs, configuration</td>
+        <td>Quotidien</td>
+    </tr>
+    <tr>
+        <td>admin.php</td>
+        <td>Gestion détaillée des élèves</td>
+        <td>Hebdomadaire</td>
+    </tr>
+    <tr>
+        <td>gestion_edt.php</td>
+        <td>Configuration des emplois du temps et salles</td>
+        <td>Mensuel</td>
+    </tr>
+    <tr>
+        <td>logs.php</td>
+        <td>Surveillance des accès et incidents</td>
+        <td>Quotidien</td>
+    </tr>
+    <tr>
+        <td>gestion_bibliotheque.php</td>
+        <td>Supervision des prêts</td>
+        <td>Hebdomadaire</td>
+    </tr>
+</table>
+
+<h3>7.2 Professeur</h3>
+<table>
+    <tr>
+        <th>Page</th>
+        <th>Action principale</th>
+    </tr>
+    <tr>
+        <td>accueil.php</td>
+        <td>Tableau de bord personnel</td>
+    </tr>
+    <tr>
+        <td>edt.php</td>
+        <td>Consulter ses cours et salles</td>
+    </tr>
+    <tr>
+        <td>preappel.php</td>
+        <td>Faire l'appel de ses classes</td>
+    </tr>
+</table>
+
+<h3>7.3 Élève</h3>
+<table>
+    <tr>
+        <th>Page</th>
+        <th>Action principale</th>
+    </tr>
+    <tr>
+        <td>accueil.php</td>
+        <td>Voir ses informations, sa classe</td>
+    </tr>
+    <tr>
+        <td>edt.php</td>
+        <td>Consulter l'emploi du temps de sa classe</td>
+    </tr>
+</table>
+
+<h3>7.4 Documentaliste</h3>
+<table>
+    <tr>
+        <th>Page</th>
+        <th>Action principale</th>
+    </tr>
+    <tr>
+        <td>gestion_bibliotheque.php</td>
+        <td>Gérer les prêts, retours, réservations</td>
+    </tr>
+    <tr>
+        <td>accueil.php</td>
+        <td>Tableau de bord</td>
+    </tr>
+</table>
 
 <!-- 8. SÉCURITÉ ET LOGS -->
 <h2 id="securite">8. Sécurité et logs</h2>
@@ -529,38 +548,32 @@ Admin :
     </tr>
     <tr>
         <td><code>CONNEXION_ECHOUEE</code></td>
-        <td>Tentative échouée (mauvais mot de passe)</td>
+        <td>Tentative échouée</td>
         <td>warning</td>
     </tr>
     <tr>
-        <td><code>PAGE_VUE</code></td>
-        <td>Visite d'une page</td>
+        <td><code>AJOUT_UTILISATEUR</code></td>
+        <td>Création d'un utilisateur</td>
         <td>info</td>
     </tr>
     <tr>
-        <td><code>APPEL_VALIDE</code></td>
-        <td>Validation d'appel</td>
+        <td><code>SUPPR_UTILISATEUR</code></td>
+        <td>Suppression d'un utilisateur</td>
+        <td>warning</td>
+    </tr>
+    <tr>
+        <td><code>AJOUT_BADGE</code></td>
+        <td>Attribution d'un badge</td>
         <td>info</td>
     </tr>
     <tr>
-        <td><code>SUPPRESSION_UTILISATEUR</code></td>
-        <td>Suppression d'un élève</td>
-        <td>warning</td>
-    </tr>
-    <tr>
-        <td><code>ERREUR_SQL</code></td>
-        <td>Erreur base de données</td>
-        <td>error</td>
-    </tr>
-    <tr>
-        <td><code>PURGE_LOGS</code></td>
-        <td>Nettoyage des logs</td>
-        <td>warning</td>
+        <td><code>PRET_LIVRE</code></td>
+        <td>Emprunt de livre</td>
+        <td>info</td>
     </tr>
 </table>
 
 <h3>8.2 Fonction addLog()</h3>
-<p>Définie dans <code>includes/db.php</code> :</p>
 <pre>
 function addLog($conn, $niveau, $type_action, $id_utilisateur, $description, $details = '') {
     $ip = $_SERVER['REMOTE_ADDR'] ?? '0.0.0.0';
@@ -576,47 +589,53 @@ function addLog($conn, $niveau, $type_action, $id_utilisateur, $description, $de
 }
 </pre>
 
-<h3>8.3 Utilisation dans les pages</h3>
-<pre>
-// Dans chaque page après include 'db.php'
-addLog($conn, 'info', 'PAGE_VUE', $_SESSION['user_id'], 
-       "Description de l'action", "Détails optionnels");
-</pre>
-
-<h3>8.4 Sécurité des mots de passe</h3>
+<h3>8.3 Sécurité des mots de passe</h3>
 <ul>
     <li>Utilisation de <code>password_hash()</code> et <code>password_verify()</code></li>
-    <li>Les mots de passe en clair dans la BDD doivent être migrés (actuellement en clair dans les données exemple)</li>
-    <li>Protection contre les injections SQL via PDO et requêtes préparées</li>
+    <li>Protection contre les injections SQL via PDO</li>
+    <li>Sessions PHP avec régénération d'ID</li>
+    <li>Validation des droits d'accès sur chaque page</li>
 </ul>
 
 <!-- 9. MAINTENANCE -->
 <h2 id="maintenance">9. Maintenance</h2>
 
-<h3>9.1 Sauvegarde</h3>
-<ul>
-    <li>Sauvegarder régulièrement la base de données (phpMyAdmin export)</li>
-    <li>Sauvegarder les fichiers du projet</li>
-    <li>Les logs peuvent être exportés depuis logs.php</li>
+<h3>9.1 Tâches régulières</h3>
+<table>
+    <tr>
+        <th>Fréquence</th>
+        <th>Action</th>
+        <th>Outil</th>
+    </tr>
+    <tr>
+        <td>Quotidien</td>
+        <td>Vérifier les logs</td>
+        <td>logs.php</td>
+    </tr>
+    <tr>
+        <td>Hebdomadaire</td>
+        <td>Vérifier les prêts en retard</td>
+        <td>gestion_bibliotheque.php</td>
+    </tr>
+    <tr>
+        <td>Mensuel</td>
+        <td>Purger les logs anciens (90 jours)</td>
+        <td>logs.php</td>
+    </tr>
+    <tr>
+        <td>Trimestriel</td>
+        <td>Sauvegarde BDD</td>
+        <td>phpMyAdmin</td>
+    </tr>
 </ul>
 
-<h3>9.2 Nettoyage</h3>
-<ul>
-    <li>Purger les logs anciens via logs.php (recommandé : 90 jours)</li>
-    <li>Vérifier les badges expirés</li>
-    <li>Mettre à jour les emplois du temps chaque année</li>
-</ul>
-
-<h3>9.3 Mise à jour des mots de passe</h3>
-<p>Pour migrer les mots de passe en clair vers des hash :</p>
+<h3>9.2 Sauvegarde</h3>
 <pre>
-// Script temporaire
-$users = $conn->query("SELECT id_utilisateur, mot_de_pass FROM utilisateur");
-foreach($users as $user) {
-    $hash = password_hash($user['mot_de_pass'], PASSWORD_DEFAULT);
-    $conn->prepare("UPDATE utilisateur SET mot_de_pass = ? WHERE id_utilisateur = ?")
-         ->execute([$hash, $user['id_utilisateur']]);
-}
+# Sauvegarde MySQL
+mysqldump -u root -p projet_bts > backup_$(date +%Y%m%d).sql
+
+# Sauvegarde fichiers
+tar -czf gestion_acces_$(date +%Y%m%d).tar.gz /path/to/gestion_acces/
 </pre>
 
 <!-- 10. DÉPANNAGE -->
@@ -633,49 +652,27 @@ foreach($users as $user) {
     <tr>
         <td>Cannot redeclare addLog()</td>
         <td>Fonction définie deux fois</td>
-        <td>Garder uniquement dans db.php, supprimer des autres fichiers</td>
+        <td>Garder uniquement dans db.php</td>
     </tr>
     <tr>
-        <td>SQLSTATE[42S02]: Base table not found</td>
+        <td>SQLSTATE[42S02]: Table not found</td>
         <td>Table manquante</td>
-        <td>Importer projet_bts.sql ou exécuter le CREATE TABLE dans db.php</td>
+        <td>Importer projet_bts.sql</td>
     </tr>
     <tr>
         <td>Connection failed</td>
         <td>Paramètres BDD incorrects</td>
-        <td>Vérifier host/user/password dans db.php</td>
+        <td>Vérifier db.php</td>
     </tr>
     <tr>
-        <td>Identifiant ou mot de passe incorrect</td>
-        <td>Mauvaises identifiants ou hash non vérifié</td>
-        <td>Vérifier les identifiants en base</td>
-    </tr>
-    <tr>
-        <td>Aucun log affiché</td>
-        <td>Table vide ou addLog non appelé</td>
-        <td>Se connecter/déconnecter pour générer des logs</td>
+        <td>QR Code ne scanne pas</td>
+        <td>Permission caméra refusée</td>
+        <td>Autoriser la caméra dans le navigateur</td>
     </tr>
 </table>
 
-<h3>10.2 Logs de débogage</h3>
-<p>Activer les erreurs PHP temporairement :</p>
-<pre>
-// En haut de index.php ou db.php
-error_reporting(E_ALL);
-ini_set('display_errors', 1);
-</pre>
-
-<h3>10.3 Vérifications rapides</h3>
-<ol>
-    <li>Le serveur Wamp est-il démarré ?</li>
-    <li>La base 'projet_bts' existe-t-elle ?</li>
-    <li>Les identifiants dans db.php sont-ils corrects ?</li>
-    <li>Les tables ont-elles été créées ?</li>
-    <li>Les sessions sont-elles activées ?</li>
-</ol>
-
-<!-- ANNEXES -->
-<h2>Annexes</h2>
+<!-- 11. ANNEXES -->
+<h2 id="annexes">11. Annexes</h2>
 
 <h3>A. Codes statut</h3>
 <table>
@@ -692,7 +689,7 @@ ini_set('display_errors', 1);
     <tr>
         <td>2</td>
         <td>Technicien</td>
-        <td>Espace technicien (à définir)</td>
+        <td>Pages techniques</td>
     </tr>
     <tr>
         <td>3</td>
@@ -707,7 +704,7 @@ ini_set('display_errors', 1);
     <tr>
         <td>5</td>
         <td>Documentaliste</td>
-        <td>À définir</td>
+        <td>Bibliothèque, Accueil</td>
     </tr>
 </table>
 
@@ -720,12 +717,32 @@ $_SESSION['nom']          // Nom
 $_SESSION['prenom']       // Prénom
 </pre>
 
-<h3>C. Niveaux de logs</h3>
+<h3>C. Structure de la table logs_systeme</h3>
+<pre>
+CREATE TABLE logs_systeme (
+    id_log INT AUTO_INCREMENT PRIMARY KEY,
+    date_log DATETIME DEFAULT CURRENT_TIMESTAMP,
+    niveau ENUM('info', 'warning', 'error', 'critical') DEFAULT 'info',
+    type_action VARCHAR(50),
+    id_utilisateur INT NULL,
+    ip_address VARCHAR(45),
+    user_agent TEXT,
+    description TEXT,
+    details TEXT,
+    INDEX idx_date (date_log),
+    INDEX idx_niveau (niveau),
+    INDEX idx_type (type_action)
+);
+</pre>
+
+<h3>D. Nouveautés version 3.0</h3>
 <ul>
-    <li><strong>info</strong> - Actions normales (connexion, page vue)</li>
-    <li><strong>warning</strong> - Incidents mineurs (tentatives échouées)</li>
-    <li><strong>error</strong> - Erreurs système (SQL, fichiers)</li>
-    <li><strong>critical</strong> - Problèmes majeurs (accès non autorisé)</li>
+    <li>✅ Interface d'administration globale (admin_global.php)</li>
+    <li>✅ Scan QR code pour recherche rapide de livres</li>
+    <li>✅ Statistiques globales avec graphiques Chart.js</li>
+    <li>✅ Gestion centralisée des badges</li>
+    <li>✅ Configuration générale du système</li>
+    <li>✅ Dashboard personnalisé pour admin</li>
 </ul>
 
 <!-- CONCLUSION -->
@@ -733,7 +750,8 @@ $_SESSION['prenom']       // Prénom
     <h3 style="color: #0e1f4c;">📌 Pour toute assistance</h3>
     <p>Documentation générée le <?= date('d/m/Y à H:i') ?></p>
     <p><strong>Mainteneur :</strong> Équipe technique - Lycée Bel Air</p>
-    <p><em>"La documentation est comme l'assurance : on ne réalise son importance que quand on en a besoin."</em></p>
+    <p><strong>Version actuelle :</strong> 3.0 (avec administration globale et scan QR)</p>
+    <p><em>"Une bonne administration est la clé d'un système fiable."</em></p>
 </div>
 
 </body>
