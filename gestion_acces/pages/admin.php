@@ -11,18 +11,30 @@ if (!isset($_SESSION['user_id']) || $_SESSION['id_statut'] != 1) {
 include '../includes/db.php';
 
 // 🔥 AJOUTER ICI - Log de visite de la page admin
-addLog($conn, 'info', 'PAGE_VUE', $_SESSION['user_id'], 
-       "Accès à la gestion des élèves", "Page: admin.php");
+addLog(
+    $conn,
+    'info',
+    'PAGE_VUE',
+    $_SESSION['user_id'],
+    "Accès à la gestion des élèves",
+    "Page: admin.php"
+);
 
 // ... dans la suppression d'un élève (ligne 105 environ)
 if (isset($_GET['delete']) && is_numeric($_GET['delete'])) {
     $id_to_delete = $_GET['delete'];
-    
+
     // 🔥 AJOUTER ICI - Log de suppression
     $nom_eleve = ""; // Récupérez le nom avant suppression
-    addLog($conn, 'warning', 'SUPPRESSION_UTILISATEUR', $_SESSION['user_id'], 
-           "Suppression d'un élève", 
-           "ID élève: $id_to_delete"); }
+    addLog(
+        $conn,
+        'warning',
+        'SUPPRESSION_UTILISATEUR',
+        $_SESSION['user_id'],
+        "Suppression d'un élève",
+        "ID élève: $id_to_delete"
+    );
+}
 
 $message = '';
 $errorMessage = '';
@@ -90,14 +102,14 @@ if (isset($_GET['delete']) && is_numeric($_GET['delete'])) {
                 // Supprimer d'abord les références dans d'autres tables
                 $deleteBadgeStmt = $conn->prepare("DELETE FROM badge WHERE id_utilisateur = ?");
                 $deleteBadgeStmt->execute([$id_to_delete]);
-                
+
                 $deleteUserMatiereStmt = $conn->prepare("DELETE FROM utilisateur_matiere WHERE id_utilisateur = ?");
                 $deleteUserMatiereStmt->execute([$id_to_delete]);
-                
+
                 // Ensuite supprimer l'utilisateur
                 $deleteStmt = $conn->prepare("DELETE FROM utilisateur WHERE id_utilisateur = ?");
                 $deleteStmt->execute([$id_to_delete]);
-                
+
                 $message = "✅ Élève supprimé avec succès.";
                 // Recharger la liste
                 header("Location: admin.php?message=deleted");
@@ -213,7 +225,7 @@ $sans_classe = $sansClasseStmt->fetch(PDO::FETCH_ASSOC);
             background: #0e1f4c;
             color: white;
             transform: translateY(-2px);
-            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
         }
 
         .classe-badge.active {
@@ -304,7 +316,7 @@ $sans_classe = $sansClasseStmt->fetch(PDO::FETCH_ASSOC);
         .back-btn:hover {
             background: #e0e0e0;
             transform: translateY(-2px);
-            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
         }
 
         .card {
@@ -541,8 +553,15 @@ $sans_classe = $sansClasseStmt->fetch(PDO::FETCH_ASSOC);
         }
 
         @keyframes fadeIn {
-            from { opacity: 0; transform: translateY(-10px); }
-            to { opacity: 1; transform: translateY(0); }
+            from {
+                opacity: 0;
+                transform: translateY(-10px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
         }
 
         /* Responsive */
@@ -552,24 +571,24 @@ $sans_classe = $sansClasseStmt->fetch(PDO::FETCH_ASSOC);
                 gap: 15px;
                 text-align: center;
             }
-            
+
             .header-actions {
                 flex-wrap: wrap;
                 justify-content: center;
             }
-            
+
             .search-bar {
                 flex-direction: column;
             }
-            
+
             .users-table {
                 font-size: 14px;
             }
-            
+
             .actions {
                 flex-direction: column;
             }
-            
+
             .classes-list {
                 justify-content: center;
             }
@@ -582,7 +601,7 @@ $sans_classe = $sansClasseStmt->fetch(PDO::FETCH_ASSOC);
 
     <div class="main-content">
         <div class="header">
-            <h1>👨‍🎓  Tableau de bord</h1>
+            <h1>👨‍🎓 Tableau de bord</h1>
             <div class="header-actions">
                 <a href="create_user.php?type=eleve" class="back-btn">➕ Ajouter un élève</a>
                 <a href="javascript:void(0)" onclick="exportEleves()" class="export-btn">📊 Exporter liste</a>
@@ -641,17 +660,17 @@ $sans_classe = $sansClasseStmt->fetch(PDO::FETCH_ASSOC);
                 <!-- Filtres par classe - TOUTES LES CLASSES -->
                 <div class="filters-section">
                     <strong>🏫 Filtrer par classe :</strong><br><br>
-                    
+
                     <div class="classes-list">
                         <!-- Toutes les classes -->
-                        <a href="admin.php" 
-                           class="classe-badge <?= empty($search) ? 'active' : '' ?>">
+                        <a href="admin.php"
+                            class="classe-badge <?= empty($search) ? 'active' : '' ?>">
                             Toutes les classes (<?= count($eleves) ?>)
                         </a>
-                        
+
                         <!-- Toutes les classes disponibles -->
                         <?php foreach ($all_classes as $classe): ?>
-                            <?php 
+                            <?php
                             $nb_eleves = $elevesParClasse[$classe['libelle']] ?? 0;
                             $badge_class = '';
                             if ($nb_eleves == 0) {
@@ -659,15 +678,15 @@ $sans_classe = $sansClasseStmt->fetch(PDO::FETCH_ASSOC);
                             }
                             ?>
                             <a href="admin.php?search=<?= urlencode($classe['libelle']) ?>"
-                               class="classe-badge <?= $search == $classe['libelle'] ? 'active' : '' ?> <?= $badge_class ?>">
+                                class="classe-badge <?= $search == $classe['libelle'] ? 'active' : '' ?> <?= $badge_class ?>">
                                 <?= htmlspecialchars($classe['libelle']) ?> (<?= $nb_eleves ?>)
                             </a>
                         <?php endforeach; ?>
-                        
+
                         <!-- Élèves sans classe -->
                         <?php if ($sans_classe['nb'] > 0): ?>
                             <a href="admin.php?search=SANS_CLASSE"
-                               class="classe-badge sans-classe <?= $search == 'SANS_CLASSE' ? 'active' : '' ?>">
+                                class="classe-badge sans-classe <?= $search == 'SANS_CLASSE' ? 'active' : '' ?>">
                                 Sans classe (<?= $sans_classe['nb'] ?>)
                             </a>
                         <?php endif; ?>
@@ -725,11 +744,11 @@ $sans_classe = $sansClasseStmt->fetch(PDO::FETCH_ASSOC);
                                             <?php endif; ?>
                                         </td>
                                         <td class="actions">
-                                            <a href="edit_user.php?id=<?= $eleve['id_utilisateur'] ?>" 
-                                               class="btn-edit">✏️ Modifier</a>
+                                            <a href="edit_user.php?id=<?= $eleve['id_utilisateur'] ?>"
+                                                class="btn-edit">✏️ Modifier</a>
                                             <?php if (empty($eleve['classe_nom'])): ?>
                                                 <button onclick="assignClasse(<?= $eleve['id_utilisateur'] ?>, '<?= htmlspecialchars(addslashes($eleve['prenom'] . ' ' . $eleve['nom'])) ?>')"
-                                                        class="btn-assign">
+                                                    class="btn-assign">
                                                     🏫 Assigner classe
                                                 </button>
                                             <?php endif; ?>
@@ -746,10 +765,10 @@ $sans_classe = $sansClasseStmt->fetch(PDO::FETCH_ASSOC);
                     </div>
 
                     <div style="margin-top: 20px; color: #666; font-size: 14px; text-align: center;">
-                        <p><?= count($eleves) ?> élève(s) trouvé(s) 
-                           <?php if (!empty($search)): ?>
-                               pour la recherche "<?= htmlspecialchars($search) ?>"
-                           <?php endif; ?>
+                        <p><?= count($eleves) ?> élève(s) trouvé(s)
+                            <?php if (!empty($search)): ?>
+                                pour la recherche "<?= htmlspecialchars($search) ?>"
+                            <?php endif; ?>
                         </p>
                     </div>
                 <?php endif; ?>
@@ -764,7 +783,7 @@ $sans_classe = $sansClasseStmt->fetch(PDO::FETCH_ASSOC);
                 <h3 style="color: #0e1f4c;" id="modalTitle">Assigner une classe</h3>
                 <button onclick="closeAssignModal()" style="background: none; border: none; font-size: 24px; cursor: pointer; color: #666;">&times;</button>
             </div>
-            
+
             <div id="assignContent">
                 <!-- Contenu dynamique -->
             </div>
@@ -833,7 +852,9 @@ $sans_classe = $sansClasseStmt->fetch(PDO::FETCH_ASSOC);
                     return aNum - bNum;
                 }
 
-                return aText.localeCompare(bText, 'fr', { sensitivity: 'base' });
+                return aText.localeCompare(bText, 'fr', {
+                    sensitivity: 'base'
+                });
             });
 
             // Inverser si déjà trié
@@ -851,7 +872,7 @@ $sans_classe = $sansClasseStmt->fetch(PDO::FETCH_ASSOC);
         // Fonction pour assigner une classe
         function assignClasse(eleveId, eleveNom) {
             document.getElementById('modalTitle').textContent = `Assigner une classe à ${eleveNom}`;
-            
+
             // Charger les classes disponibles
             fetch(`ajax_get_classes.php`)
                 .then(response => response.text())
@@ -893,25 +914,25 @@ $sans_classe = $sansClasseStmt->fetch(PDO::FETCH_ASSOC);
         function assignClasseSubmit(eleveId) {
             const form = document.getElementById('assignForm');
             const formData = new FormData(form);
-            
+
             fetch('ajax_assign_classe.php', {
-                method: 'POST',
-                body: formData
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.success) {
-                    alert(data.message);
-                    closeAssignModal();
-                    window.location.reload();
-                } else {
-                    alert('Erreur: ' + data.error);
-                }
-            })
-            .catch(error => {
-                console.error('Erreur:', error);
-                alert('Erreur de communication avec le serveur.');
-            });
+                    method: 'POST',
+                    body: formData
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        alert(data.message);
+                        closeAssignModal();
+                        window.location.reload();
+                    } else {
+                        alert('Erreur: ' + data.error);
+                    }
+                })
+                .catch(error => {
+                    console.error('Erreur:', error);
+                    alert('Erreur de communication avec le serveur.');
+                });
         }
 
         // Fermer la modal avec ESC
@@ -922,4 +943,5 @@ $sans_classe = $sansClasseStmt->fetch(PDO::FETCH_ASSOC);
         });
     </script>
 </body>
+
 </html>

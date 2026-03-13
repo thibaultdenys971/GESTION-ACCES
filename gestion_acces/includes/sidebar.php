@@ -7,13 +7,12 @@ if (!isset($_SESSION['user_id'])) {
 
 // Récupérer le statut de l'utilisateur pour afficher les liens appropriés
 $is_admin = ($_SESSION['id_statut'] == 1);
+$is_professeur = ($_SESSION['id_statut'] == 3);
+$is_documentaliste = ($_SESSION['id_statut'] == 2);
+$is_eleve = ($_SESSION['id_statut'] == 4);
 
-// includes/sidebar.php
 // Récupérer la page actuelle
 $current_page = basename($_SERVER['PHP_SELF']);
-
-// Dans chaque lien, on pourrait logger le clic
-// Mais c'est optionnel car on log déjà la visite des pages
 ?>
 <!DOCTYPE html>
 <html lang="fr">
@@ -88,6 +87,8 @@ $current_page = basename($_SERVER['PHP_SELF']);
             transition: width 0.3s ease;
             overflow-x: hidden;
             z-index: 1000;
+            display: flex;
+            flex-direction: column;
         }
 
         .sidebar.collapsed {
@@ -126,6 +127,25 @@ $current_page = basename($_SERVER['PHP_SELF']);
             display: none;
         }
 
+        .sidebar-section {
+            margin-top: 10px;
+            margin-bottom: 10px;
+            border-top: 1px solid rgba(255,255,255,0.1);
+            padding-top: 10px;
+        }
+
+        .sidebar-section-title {
+            color: rgba(255,255,255,0.5);
+            font-size: 12px;
+            padding: 10px 20px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .sidebar.collapsed .sidebar-section-title {
+            display: none;
+        }
+
         /* Contenu principal */
         .main-content {
             margin-left: 220px;
@@ -137,6 +157,12 @@ $current_page = basename($_SERVER['PHP_SELF']);
 
         .sidebar.collapsed~.main-content {
             margin-left: 60px;
+        }
+
+        /* Déconnexion en bas */
+        .logout-link {
+            margin-top: auto;
+            border-top: 1px solid rgba(255,255,255,0.1);
         }
     </style>
 </head>
@@ -164,50 +190,71 @@ $current_page = basename($_SERVER['PHP_SELF']);
     </div>
 
     <!-- Barre latérale -->
-    <!-- Barre latérale -->
     <div class="sidebar" id="sidebar">
+        <!-- LIENS COMMUNS À TOUS -->
+        <a href="accueil.php" class="<?= $current_page == 'accueil.php' ? 'active' : '' ?>">
+            <i>🏠</i> <span class="link-text">Accueil</span>
+        </a>
+
+        <!-- SECTION ADMIN UNIQUEMENT -->
         <?php if ($is_admin): ?>
-            <a href="admin.php" class="<?= basename($_SERVER['PHP_SELF']) == 'admin.php' ? 'active' : '' ?>">
-                <i>🏠</i> <span class="link-text">Tableau de bord</span>
-            </a>
-                        <a href="logs.php" class="<?= basename($_SERVER['PHP_SELF']) == 'logs.php' ? 'active' : '' ?>">
-                <i>📃</i> <span class="link-text">Historisation</span>
-            </a>
-
-            <a href="create_user.php" class="<?= basename($_SERVER['PHP_SELF']) == 'create_user.php' ? 'active' : '' ?>">
-                <i>👤</i> <span class="link-text">Créer utilisateur</span>
-                <?php if (in_array($_SESSION['id_statut'], [1, 3])): // Admin et Professeur 
-                ?>
-                    <a href="preappel.php">
-                        <i>📋</i> Préappel
-                    </a>
-                <?php endif; ?>
-                <a href="gestion_utilisateurs.php" class="<?= basename($_SERVER['PHP_SELF']) == 'gestion.eleves.php' ? 'active' : '' ?>">
-                    <i>👨‍🎓</i> <span class="link-text">Gestion Utilisateurs</span>
+            <div class="sidebar-section">
+                <div class="sidebar-section-title">Administration</div>
+                <a href="admin_global.php" class="<?= $current_page == 'admin_global.php' ? 'active' : '' ?>">
+                    <i>👑</i> <span class="link-text">Administration Globale</span>
                 </a>
+                <a href="gestion_utilisateurs.php" class="<?= $current_page == 'gestion_utilisateurs.php' ? 'active' : '' ?>">
+                    <i>👥</i> <span class="link-text">Gestion Utilisateurs</span>
+                </a>
+                <a href="gestion_edt.php" class="<?= $current_page == 'gestion_edt.php' ? 'active' : '' ?>">
+                    <i>⚙️</i> <span class="link-text">Gestion EDT</span>
+                </a>
+                <a href="logs.php" class="<?= $current_page == 'logs.php' ? 'active' : '' ?>">
+                    <i>📃</i> <span class="link-text">Historisation</span>
+                </a>
+            </div>
+        <?php endif; ?>
 
+        <!-- SECTION PROFESSEURS -->
+        <?php if ($is_professeur || $is_admin): ?>
+            <div class="sidebar-section">
+                <div class="sidebar-section-title">Espace Professeur</div>
+                <a href="edt.php" class="<?= $current_page == 'edt.php' ? 'active' : '' ?>">
+                    <i>📅</i> <span class="link-text">Emploi du temps</span>
+                </a>
+                <a href="preappel.php" class="<?= $current_page == 'preappel.php' ? 'active' : '' ?>">
+                    <i>📋</i> <span class="link-text">Préappel</span>
+                </a>
+            </div>
+        <?php endif; ?>
 
-                    <a href="gestion_bibliotheque.php" class="<?= basename($_SERVER['PHP_SELF']) == 'gestion_gestion_bibliotheque.php' ? 'active' : '' ?>">
-                        <i>📚</i> <span class="link-text">Gestion distributeur</span>
-                    <?php endif; ?>
-                    <!-- Dans votre sidebar.php existant, ajoutez : -->
-                    <a href="edt.php">
-                        <i>📅</i> Emploi du temps
-                    </a>
+        <!-- SECTION DOCUMENTALISTES -->
+        <?php if ($is_documentaliste || $is_admin): ?>
+            <div class="sidebar-section">
+                <div class="sidebar-section-title">Espace Documentaliste</div>
+                <a href="gestion_bibliotheque.php" class="<?= $current_page == 'gestion_bibliotheque.php' ? 'active' : '' ?>">
+                    <i>📚</i> <span class="link-text">Gestion distributeur</span>
+                </a>
+                <a href="simulation_distributeur.php" class="<?= $current_page == 'simulation_distributeur.php' ? 'active' : '' ?>">
+                    <i>🤖</i> <span class="link-text">Simulation Distributeur</span>
+                </a>
+            </div>
+        <?php endif; ?>
 
-                    
+        <!-- SECTION ÉLÈVES -->
+        <?php if ($is_eleve): ?>
+            <div class="sidebar-section">
+                <div class="sidebar-section-title">Espace Élève</div>
+                <a href="edt.php" class="<?= $current_page == 'edt.php' ? 'active' : '' ?>">
+                    <i>📅</i> <span class="link-text">Emploi du temps</span>
+                </a>
+            </div>
+        <?php endif; ?>
 
-                    <?php if ($_SESSION['id_statut'] == 1): // Admin 
-                    ?>
-                        <a href="gestion_edt.php">
-                            <i>⚙️</i> Gestion EDT</a>
-                        
-                            
-                    
-                    <?php endif; ?>
-                    <a href="../index.php?logout=1" style="margin-top: auto; border-top: 1px solid rgba(255,255,255,0.1);">
-                        <i>🚪</i> <span class="link-text">Déconnexion</span></a>   
-                    
+        <!-- DÉCONNEXION (TOUT LE MONDE) -->
+        <a href="../index.php?logout=1" class="logout-link">
+            <i>🚪</i> <span class="link-text">Déconnexion</span>
+        </a>
     </div>
 
     <script>

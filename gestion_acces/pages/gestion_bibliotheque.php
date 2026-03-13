@@ -1,8 +1,9 @@
 <?php
-// pages/gestion_bibliotheque.php
+// pages/admin_global.php
 session_start();
 
-if (!isset($_SESSION['user_id']) || ($_SESSION['id_statut'] != 2 && $_SESSION['id_statut'] != 1)) {
+// VÉRIFICATION ADMIN SEULEMENT
+if (!isset($_SESSION['user_id']) || $_SESSION['id_statut'] != 1) {
     header("Location: ../index.php?error=access_denied");
     exit();
 }
@@ -11,19 +12,292 @@ include '../includes/db.php';
 
 $message = '';
 $errorMessage = '';
-$search = $_GET['search'] ?? '';
+$activeTab = $_GET['tab'] ?? 'dashboard';
 
-// TRAITEMENT DES ACTIONS
+// ==================== FONCTIONS UTILITAIRES ====================
+
+// Fonction de vérification d'unicité de l'identifiant
+function verifierIdentifiantUnique($conn, $identifiant, $id_utilisateur_exclu = null)
+{
+    $sql = "SELECT COUNT(*) FROM utilisateur WHERE identifiant = ?";
+    $params = [$identifiant];
+
+    if ($id_utilisateur_exclu !== null) {
+        $sql .= " AND id_utilisateur != ?";
+        $params[] = $id_utilisateur_exclu;
+    }
+
+    $stmt = $conn->prepare($sql);
+    $stmt->execute($params);
+    return $stmt->fetchColumn() == 0;
+}
+
+// Fonction de génération de code barre unique
+function genererCodeBarreUnique($conn)
+{
+    do {
+        // Format: LIV-YYYYMMDD-XXXXX (ex: LIV-20250310-00123)
+        $date = date('Ymd');
+        $random = str_pad(rand(0, 99999), 5, '0', STR_PAD_LEFT);
+        $code_barre = "LIV-{$date}-{$random}";
+
+        // Vérifier si le code existe déjà
+        $stmt = $conn->prepare("SELECT COUNT(*) FROM ouvrage WHERE code_barre = ?");
+        $stmt->execute([$code_barre]);
+        $existe = $stmt->fetchColumn() > 0;
+    } while ($existe);
+
+    return $code_barre;
+}
+
+// Fonction de génération de code barre ISBN-like
+function genererISBNLike($conn)
+{
+    do {
+        // Format: 978-2-XXXX-XXXX-X (style ISBN)
+        $part1 = "978";
+        $part2 = "2";
+        $part3 = str_pad(rand(0, 9999), 4, '0', STR_PAD_LEFT);
+        $part4 = str_pad(rand(0, 9999), 4, '0', STR_PAD_LEFT);
+        $part5 = rand(0, 9);
+
+        $code_barre = "{$part1}-{$part2}-{$part3}-{$part4}-{$part5}";
+
+        $stmt = $conn->prepare("SELECT COUNT(*) FROM ouvrage WHERE code_barre = ?");
+        $stmt->execute([$code_barre]);
+        $existe = $stmt->fetchColumn() > 0;
+    } while ($existe);
+
+    return $code_barre;
+}
+
+// Fonction de génération de code barre simple
+function genererCodeBarreSimple($conn)
+{
+    do {
+        $prefix = 'BC';
+        $timestamp = time();
+        $random = rand(100, 999);
+        $code_barre = $prefix . $timestamp . $random;
+
+        $stmt = $conn->prepare("SELECT COUNT(*) FROM ouvrage WHERE code_barre = ?");
+        $stmt->execute([$code_barre]);
+        $existe = $stmt->fetchColumn() > 0;
+    } while ($existe);
+
+    return $code_barre;
+}
+
+// Fonction de génération QR code
+function generateQRCode($data, $filename = null)
+{
+    $qr_url = "https://chart.googleapis.com/chart?chs=200x200&cht=qr&chl=" . urlencode($data) . "&choe=UTF-8";
+
+    if ($filename) {
+        $qr_content = @file_get_contents($qr_url);
+        if ($qr_content) {
+            file_put_contents($filename, $qr_content);
+            return true;
+        }
+        return false;
+    }
+
+    return $qr_url;
+}
+
+function ensureQRFolder()
+{
+    $qr_folder = '../assets/qr_codes/';
+    if (!file_exists($qr_folder)) {
+        mkdir($qr_folder, 0777, true);
+    }
+    return $qr_folder;
+}
+
+// ==================== TRAITEMENT DES ACTIONS ====================
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    // AJOUTER UN OUVRAGE
-    if (isset($_POST['ajouter_ouvrage'])) {
+
+    // --- GESTION UTILISATEURS ---
+
+    // AJOUTER UN ÉLÈVE
+    if (isset($_POST['ajouter_eleve'])) {
+        $nom = trim($_POST['nom']);
+        $prenom = trim($_POST['prenom']);
+        $identifiant = trim($_POST['identifiant']);
+        $mot_de_pass = $_POST['mot_de_pass'];
+        $id_classe = intval($_POST['id_classe']);
+
+        if (!verifierIdentifiantUnique($conn, $identifiant)) {
+            $errorMessage = "❌ Cet identifiant est déjà utilisé.";
+        } else {
+            try {
+                $conn->beginTransaction();
+
+                $mot_de_pass_hash = password_hash($mot_de_pass, PASSWORD_DEFAULT);
+
+                $userStmt = $conn->prepare("
+                    INSERT INTO utilisateur (nom, prenom, identifiant, mot_de_pass, id_statut, id_classe, peut_se_connectert) 
+                    VALUES (?, ?, ?, ?, 4, ?, 0)
+                ");
+                $userStmt->execute([$nom, $prenom, $identifiant, $mot_de_pass_hash, $id_classe]);
+                $id_utilisateur = $conn->lastInsertId();
+
+                $date_expiration = date('Y-m-d', strtotime('+2 years'));
+                $badgeStmt = $conn->prepare("
+                    INSERT INTO badge (date_emission, date_expiration, etat, id_utilisateur, id_statut) 
+                    VALUES (CURDATE(), ?, 'actif', ?, 4)
+                ");
+                $badgeStmt->execute([$date_expiration, $id_utilisateur]);
+                $id_badge = $conn->lastInsertId();
+
+                $updateUserStmt = $conn->prepare("UPDATE utilisateur SET id_badge = ? WHERE id_utilisateur = ?");
+                $updateUserStmt->execute([$id_badge, $id_utilisateur]);
+
+                $conn->commit();
+
+                $message = "✅ Élève ajouté avec badge créé automatiquement !";
+            } catch (PDOException $e) {
+                $conn->rollBack();
+                $errorMessage = "❌ Erreur : " . $e->getMessage();
+            }
+        }
+    }
+
+    // AJOUTER UN PROFESSEUR
+    elseif (isset($_POST['ajouter_professeur'])) {
+        $nom = trim($_POST['nom_prof']);
+        $prenom = trim($_POST['prenom_prof']);
+        $identifiant = trim($_POST['identifiant_prof']);
+        $mot_de_pass = $_POST['mot_de_pass_prof'];
+
+        if (!verifierIdentifiantUnique($conn, $identifiant)) {
+            $errorMessage = "❌ Cet identifiant est déjà utilisé.";
+        } else {
+            try {
+                $conn->beginTransaction();
+
+                $mot_de_pass_hash = password_hash($mot_de_pass, PASSWORD_DEFAULT);
+
+                $userStmt = $conn->prepare("
+                    INSERT INTO utilisateur (nom, prenom, identifiant, mot_de_pass, id_statut, peut_se_connectert) 
+                    VALUES (?, ?, ?, ?, 3, 0)
+                ");
+                $userStmt->execute([$nom, $prenom, $identifiant, $mot_de_pass_hash]);
+                $id_utilisateur = $conn->lastInsertId();
+
+                $date_expiration = date('Y-m-d', strtotime('+2 years'));
+                $badgeStmt = $conn->prepare("
+                    INSERT INTO badge (date_emission, date_expiration, etat, id_utilisateur, id_statut) 
+                    VALUES (CURDATE(), ?, 'actif', ?, 3)
+                ");
+                $badgeStmt->execute([$date_expiration, $id_utilisateur]);
+                $id_badge = $conn->lastInsertId();
+
+                $updateUserStmt = $conn->prepare("UPDATE utilisateur SET id_badge = ? WHERE id_utilisateur = ?");
+                $updateUserStmt->execute([$id_badge, $id_utilisateur]);
+
+                $conn->commit();
+
+                $message = "✅ Professeur ajouté avec badge créé automatiquement !";
+            } catch (PDOException $e) {
+                $conn->rollBack();
+                $errorMessage = "❌ Erreur : " . $e->getMessage();
+            }
+        }
+    }
+
+    // CRÉER UN BADGE POUR UN UTILISATEUR EXISTANT
+    elseif (isset($_POST['creer_badge'])) {
+        $id_utilisateur = intval($_POST['id_utilisateur']);
+
+        try {
+            $checkStmt = $conn->prepare("SELECT id_badge, id_statut, nom, prenom FROM utilisateur WHERE id_utilisateur = ?");
+            $checkStmt->execute([$id_utilisateur]);
+            $user = $checkStmt->fetch();
+
+            if ($user) {
+                if ($user['id_badge']) {
+                    $errorMessage = "❌ Cet utilisateur a déjà un badge.";
+                } else {
+                    $date_expiration = date('Y-m-d', strtotime('+2 years'));
+
+                    $badgeStmt = $conn->prepare("
+                        INSERT INTO badge (date_emission, date_expiration, etat, id_utilisateur, id_statut) 
+                        VALUES (CURDATE(), ?, 'actif', ?, ?)
+                    ");
+                    $badgeStmt->execute([$date_expiration, $id_utilisateur, $user['id_statut']]);
+                    $id_badge = $conn->lastInsertId();
+
+                    $updateUserStmt = $conn->prepare("UPDATE utilisateur SET id_badge = ? WHERE id_utilisateur = ?");
+                    $updateUserStmt->execute([$id_badge, $id_utilisateur]);
+
+                    $message = "✅ Badge créé avec succès ! (valide 2 ans)";
+                }
+            } else {
+                $errorMessage = "❌ Utilisateur non trouvé.";
+            }
+        } catch (PDOException $e) {
+            $errorMessage = "❌ Erreur : " . $e->getMessage();
+        }
+    }
+
+    // MODIFIER UN UTILISATEUR
+    elseif (isset($_POST['modifier_utilisateur'])) {
+        $id_utilisateur = intval($_POST['id_utilisateur']);
+        $nom = trim($_POST['nom']);
+        $prenom = trim($_POST['prenom']);
+        $identifiant = trim($_POST['identifiant']);
+        $id_classe = !empty($_POST['id_classe']) ? intval($_POST['id_classe']) : null;
+
+        if (!verifierIdentifiantUnique($conn, $identifiant, $id_utilisateur)) {
+            $errorMessage = "❌ Cet identifiant est déjà utilisé.";
+        } else {
+            try {
+                $sql = "UPDATE utilisateur SET nom = ?, prenom = ?, identifiant = ?, id_classe = ?";
+                $params = [$nom, $prenom, $identifiant, $id_classe];
+
+                if (!empty($_POST['mot_de_pass'])) {
+                    $sql .= ", mot_de_pass = ?";
+                    $params[] = password_hash($_POST['mot_de_pass'], PASSWORD_DEFAULT);
+                }
+
+                $sql .= " WHERE id_utilisateur = ?";
+                $params[] = $id_utilisateur;
+
+                $stmt = $conn->prepare($sql);
+                $stmt->execute($params);
+
+                $message = "✅ Utilisateur modifié avec succès !";
+            } catch (PDOException $e) {
+                $errorMessage = "❌ Erreur : " . $e->getMessage();
+            }
+        }
+    }
+
+    // --- GESTION BIBLIOTHÈQUE AVEC QR CODES ---
+
+    // AJOUTER UN LIVRE AVEC CODE BARRE AUTO ET QR CODE
+    elseif (isset($_POST['ajouter_livre'])) {
         $titre = trim($_POST['titre']);
-        $code_barre = trim($_POST['code_barre']);
         $etat = trim($_POST['etat']);
         $cote = trim($_POST['cote']);
         $stock = intval($_POST['stock']);
+        $type_code = $_POST['type_code'] ?? 'auto';
+        $generer_qr = isset($_POST['generer_qr']);
 
         try {
+            $conn->beginTransaction();
+
+            // GÉNÉRER LE CODE BARRE AUTOMATIQUEMENT
+            if ($type_code === 'auto') {
+                $code_barre = genererCodeBarreUnique($conn);
+            } elseif ($type_code === 'isbn') {
+                $code_barre = genererISBNLike($conn);
+            } else {
+                $code_barre = genererCodeBarreSimple($conn);
+            }
+
             // Ajouter l'ouvrage
             $ouvrageStmt = $conn->prepare("INSERT INTO ouvrage (titre, code_barre, etat, cote) VALUES (?, ?, ?, ?)");
             $ouvrageStmt->execute([$titre, $code_barre, $etat, $cote]);
@@ -33,274 +307,145 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $exemplaireStmt = $conn->prepare("INSERT INTO exemplaire (stock, reserver, id_ouvrage) VALUES (?, 0, ?)");
             $exemplaireStmt->execute([$stock, $ouvrage_id]);
 
-            $message = "✅ Ouvrage ajouté avec succès !";
+            // GÉNÉRER LE QR CODE
+            if ($generer_qr) {
+                $qr_folder = ensureQRFolder();
+                $qr_filename = $qr_folder . 'livre_' . $ouvrage_id . '_' . preg_replace('/[^a-zA-Z0-9]/', '_', $code_barre) . '.png';
+                generateQRCode($code_barre, $qr_filename);
+            }
+
+            $conn->commit();
+
+            $message = "✅ Livre ajouté avec succès !<br>";
+            $message .= "📋 Code barre généré : <strong>{$code_barre}</strong><br>";
+            $message .= $generer_qr ? "📱 QR Code généré automatiquement." : "";
         } catch (PDOException $e) {
-            $errorMessage = "Erreur : " . $e->getMessage();
+            $conn->rollBack();
+            $errorMessage = "❌ Erreur : " . $e->getMessage();
         }
     }
 
-    // ENREGISTRER UN PRÊT (par un élève/prof)
-    elseif (isset($_POST['enregistrer_pret'])) {
+    // GÉNÉRER QR CODE POUR LIVRE EXISTANT
+    elseif (isset($_POST['generer_qr_livre'])) {
         $id_ouvrage = intval($_POST['id_ouvrage']);
-        $id_utilisateur = $_SESSION['user_id']; // L'utilisateur qui fait le prêt
+        $code_barre = $_POST['code_barre'];
+        $titre = $_POST['titre'];
 
         try {
-            // Vérifier le stock disponible (non réservé)
-            $checkStmt = $conn->prepare("
-                SELECT id_exemplaire, stock, reserver 
-                FROM exemplaire 
-                WHERE id_ouvrage = ? AND stock > 0
-            ");
-            $checkStmt->execute([$id_ouvrage]);
-            $exemplaire = $checkStmt->fetch();
+            $qr_folder = ensureQRFolder();
+            $qr_filename = $qr_folder . 'livre_' . $id_ouvrage . '_' . preg_replace('/[^a-zA-Z0-9]/', '_', $code_barre) . '.png';
 
-            if ($exemplaire && $exemplaire['stock'] > 0) {
-                // Récupérer le badge de l'utilisateur
-                $badgeStmt = $conn->prepare("SELECT id_badge FROM badge WHERE id_utilisateur = ? AND etat = 'actif' LIMIT 1");
-                $badgeStmt->execute([$id_utilisateur]);
-                $badge = $badgeStmt->fetch();
-
-                if ($badge) {
-                    // Calculer la date de retour (14 jours)
-                    $date_retour = date('Y-m-d', strtotime('+14 days'));
-
-                    // Créer le prêt avec date automatique (14 jours)
-                    $pretStmt = $conn->prepare("
-                        INSERT INTO pret (date_pret, date_retour_prevu) 
-                        VALUES (CURDATE(), ?)
-                    ");
-                    $pretStmt->execute([$date_retour]);
-                    $pret_id = $conn->lastInsertId();
-
-                    // Lier l'ouvrage au prêt
-                    $etreStmt = $conn->prepare("INSERT INTO etre (id_ouvrage, id_pret) VALUES (?, ?)");
-                    $etreStmt->execute([$id_ouvrage, $pret_id]);
-
-                    // Lier le badge au prêt (via la table realiser)
-                    $realiserStmt = $conn->prepare("INSERT INTO realiser (id_pret, id_badge) VALUES (?, ?)");
-                    $realiserStmt->execute([$pret_id, $badge['id_badge']]);
-
-                    // Mettre à jour le stock (diminuer)
-                    $updateStmt = $conn->prepare("UPDATE exemplaire SET stock = stock - 1 WHERE id_exemplaire = ?");
-                    $updateStmt->execute([$exemplaire['id_exemplaire']]);
-
-                    // Marquer comme réservé
-                    $reserverStmt = $conn->prepare("UPDATE exemplaire SET reserver = reserver + 1 WHERE id_ouvrage = ?");
-                    $reserverStmt->execute([$id_ouvrage]);
-
-                    $date_retour_fr = date('d/m/Y', strtotime($date_retour));
-                    $message = "✅ Prêt enregistré avec succès ! Date limite de retour : $date_retour_fr";
-                } else {
-                    $errorMessage = "❌ Vous n'avez pas de badge actif pour emprunter.";
-                }
+            if (generateQRCode($code_barre, $qr_filename)) {
+                $message = "✅ QR Code généré avec succès !";
             } else {
-                $errorMessage = "❌ Cet ouvrage n'est plus disponible ou est déjà réservé.";
+                $errorMessage = "❌ Erreur lors de la génération du QR Code.";
             }
-        } catch (PDOException $e) {
-            $errorMessage = "Erreur : " . $e->getMessage();
+        } catch (Exception $e) {
+            $errorMessage = "❌ Erreur : " . $e->getMessage();
         }
     }
 
-    // RÉSERVER UN LIVRE (sans l'emprunter)
-    elseif (isset($_POST['reserver_livre'])) {
+    // REGÉNÉRER UN CODE BARRE POUR UN LIVRE
+    elseif (isset($_POST['regenerer_code_barre'])) {
         $id_ouvrage = intval($_POST['id_ouvrage']);
+        $ancien_code = $_POST['ancien_code'];
 
         try {
-            // Vérifier s'il y a du stock
-            $checkStmt = $conn->prepare("
-                SELECT id_exemplaire, stock 
-                FROM exemplaire 
-                WHERE id_ouvrage = ? AND stock > 0
-            ");
-            $checkStmt->execute([$id_ouvrage]);
-            $exemplaire = $checkStmt->fetch();
+            // Générer un nouveau code barre unique
+            $nouveau_code = genererCodeBarreUnique($conn);
 
-            if ($exemplaire) {
-                // Marquer comme réservé
-                $reserverStmt = $conn->prepare("
-                    UPDATE exemplaire 
-                    SET reserver = reserver + 1 
-                    WHERE id_exemplaire = ?
-                ");
-                $reserverStmt->execute([$exemplaire['id_exemplaire']]);
+            // Mettre à jour dans la base
+            $updateStmt = $conn->prepare("UPDATE ouvrage SET code_barre = ? WHERE id_ouvrage = ?");
+            $updateStmt->execute([$nouveau_code, $id_ouvrage]);
 
-                $message = "✅ Livre réservé avec succès ! Il est mis de côté pour vous.";
-            } else {
-                $errorMessage = "❌ Cet ouvrage n'est plus disponible pour réservation.";
+            // Régénérer le QR code si nécessaire
+            $qr_folder = ensureQRFolder();
+            $ancien_qr = $qr_folder . 'livre_' . $id_ouvrage . '_' . preg_replace('/[^a-zA-Z0-9]/', '_', $ancien_code) . '.png';
+            $nouveau_qr = $qr_folder . 'livre_' . $id_ouvrage . '_' . preg_replace('/[^a-zA-Z0-9]/', '_', $nouveau_code) . '.png';
+
+            // Supprimer l'ancien QR s'il existe
+            if (file_exists($ancien_qr)) {
+                unlink($ancien_qr);
             }
+
+            // Générer le nouveau QR
+            generateQRCode($nouveau_code, $nouveau_qr);
+
+            $message = "✅ Code barre régénéré avec succès !<br>";
+            $message .= "Ancien : {$ancien_code}<br>";
+            $message .= "Nouveau : <strong>{$nouveau_code}</strong>";
         } catch (PDOException $e) {
-            $errorMessage = "Erreur : " . $e->getMessage();
-        }
-    }
-
-    // ANNULER UNE RÉSERVATION
-    elseif (isset($_POST['annuler_reservation'])) {
-        $id_ouvrage = intval($_POST['id_ouvrage']);
-
-        try {
-            // Annuler la réservation
-            $annulerStmt = $conn->prepare("
-                UPDATE exemplaire 
-                SET reserver = CASE WHEN reserver > 0 THEN reserver - 1 ELSE 0 END
-                WHERE id_ouvrage = ?
-            ");
-            $annulerStmt->execute([$id_ouvrage]);
-
-            $message = "✅ Réservation annulée avec succès !";
-        } catch (PDOException $e) {
-            $errorMessage = "Erreur : " . $e->getMessage();
-        }
-    }
-
-    // RETOURNER UN LIVRE
-    elseif (isset($_POST['retourner_livre'])) {
-        $pret_id = intval($_POST['pret_id']);
-
-        try {
-            // Récupérer l'ouvrage associé
-            $ouvrageStmt = $conn->prepare("
-                SELECT o.id_ouvrage 
-                FROM pret p
-                JOIN etre e ON p.id_pret = e.id_pret
-                JOIN ouvrage o ON e.id_ouvrage = o.id_ouvrage
-                WHERE p.id_pret = ?
-            ");
-            $ouvrageStmt->execute([$pret_id]);
-            $ouvrage = $ouvrageStmt->fetch();
-
-            if ($ouvrage) {
-                // Marquer le prêt comme retourné
-                $retourStmt = $conn->prepare("
-                    UPDATE pret 
-                    SET date_retour_effectif = CURDATE()
-                    WHERE id_pret = ?
-                ");
-                $retourStmt->execute([$pret_id]);
-
-                // Réaugmenter le stock et diminuer les réservations
-                $updateStmt = $conn->prepare("
-                    UPDATE exemplaire 
-                    SET stock = stock + 1,
-                        reserver = CASE WHEN reserver > 0 THEN reserver - 1 ELSE 0 END
-                    WHERE id_ouvrage = ?
-                ");
-                $updateStmt->execute([$ouvrage['id_ouvrage']]);
-
-                $message = "✅ Livre retourné avec succès !";
-            }
-        } catch (PDOException $e) {
-            $errorMessage = "Erreur : " . $e->getMessage();
-        }
-    }
-
-    // PROLONGER UN PRÊT (ajout de 7 jours)
-    elseif (isset($_POST['prolonger_pret'])) {
-        $pret_id = intval($_POST['pret_id']);
-
-        try {
-            // Vérifier si déjà prolongé
-            $checkStmt = $conn->prepare("SELECT prolongation, date_retour_prevu FROM pret WHERE id_pret = ?");
-            $checkStmt->execute([$pret_id]);
-            $pret = $checkStmt->fetch();
-
-            if (!$pret['prolongation'] && $pret['date_retour_prevu']) {
-                // Ajouter 7 jours à la date de retour prévue
-                $nouvelle_date = date('Y-m-d', strtotime($pret['date_retour_prevu'] . ' +7 days'));
-
-                $prolongStmt = $conn->prepare("
-                    UPDATE pret 
-                    SET prolongation = ?
-                    WHERE id_pret = ?
-                ");
-                $prolongStmt->execute([$nouvelle_date, $pret_id]);
-                $message = "✅ Prêt prolongé de 7 jours supplémentaires !";
-            } else {
-                $errorMessage = "❌ Ce prêt a déjà été prolongé ou n'a pas de date de retour.";
-            }
-        } catch (PDOException $e) {
-            $errorMessage = "Erreur : " . $e->getMessage();
+            $errorMessage = "❌ Erreur : " . $e->getMessage();
         }
     }
 }
 
-// RÉCUPÉRER LES OUVRAGES AVEC RÉSERVATIONS
-$ouvrageQuery = "
+// ==================== RÉCUPÉRATION DES DONNÉES ====================
+
+// Utilisateurs (avec leurs badges)
+$utilisateurs = $conn->query("
+    SELECT u.*, s.statut, c.libelle as classe_nom, 
+           b.date_emission, b.date_expiration, b.etat as etat_badge
+    FROM utilisateur u
+    LEFT JOIN statut s ON u.id_statut = s.id_statut
+    LEFT JOIN classe c ON u.id_classe = c.id_classe
+    LEFT JOIN badge b ON u.id_badge = b.id_badge
+    ORDER BY u.nom, u.prenom
+")->fetchAll(PDO::FETCH_ASSOC);
+
+// Classes
+$classes = $conn->query("SELECT * FROM classe ORDER BY libelle")->fetchAll(PDO::FETCH_ASSOC);
+
+// Statuts
+$statuts = $conn->query("SELECT * FROM statut ORDER BY id_statut")->fetchAll(PDO::FETCH_ASSOC);
+
+// Badges
+$badges = $conn->query("
+    SELECT b.*, u.nom, u.prenom, u.identifiant
+    FROM badge b
+    JOIN utilisateur u ON b.id_utilisateur = u.id_utilisateur
+    ORDER BY b.date_expiration ASC
+")->fetchAll(PDO::FETCH_ASSOC);
+
+// Livres avec QR codes
+$livres = $conn->query("
     SELECT o.*, 
            COALESCE(SUM(e.stock), 0) as total_stock,
            COALESCE(SUM(e.reserver), 0) as total_reserver
     FROM ouvrage o 
     LEFT JOIN exemplaire e ON o.id_ouvrage = e.id_ouvrage 
     GROUP BY o.id_ouvrage
-";
-
-if (!empty($search)) {
-    $searchTerm = "%$search%";
-    $ouvrageQuery .= " HAVING o.titre LIKE ? OR o.code_barre LIKE ? OR o.cote LIKE ?";
-    $ouvrageStmt = $conn->prepare($ouvrageQuery);
-    $ouvrageStmt->execute([$searchTerm, $searchTerm, $searchTerm]);
-} else {
-    $ouvrageStmt = $conn->prepare($ouvrageQuery);
-    $ouvrageStmt->execute();
-}
-
-$ouvrages = $ouvrageStmt->fetchAll(PDO::FETCH_ASSOC);
-
-// RÉCUPÉRER LES PRÊTS EN COURS - REQUÊTE SIMPLIFIÉE
-$pretStmt = $conn->prepare("
-    SELECT p.*, o.titre, o.code_barre, 
-           u.nom, u.prenom, u.identifiant,
-           DATE_ADD(p.date_pret, INTERVAL 14 DAY) as date_limite_calculee,
-           COALESCE(p.prolongation, DATE_ADD(p.date_pret, INTERVAL 14 DAY)) as date_limite_finale,
-           DATEDIFF(COALESCE(p.prolongation, DATE_ADD(p.date_pret, INTERVAL 14 DAY)), CURDATE()) as jours_restants
-    FROM pret p
-    JOIN etre et ON p.id_pret = et.id_pret
-    JOIN ouvrage o ON et.id_ouvrage = o.id_ouvrage
-    LEFT JOIN realiser r ON p.id_pret = r.id_pret
-    LEFT JOIN badge b ON r.id_badge = b.id_badge
-    LEFT JOIN utilisateur u ON b.id_utilisateur = u.id_utilisateur
-    WHERE p.date_retour_effectif IS NULL
-    ORDER BY COALESCE(p.prolongation, DATE_ADD(p.date_pret, INTERVAL 14 DAY)) ASC
-");
-$pretStmt->execute();
-$prets = $pretStmt->fetchAll(PDO::FETCH_ASSOC);
-
-// DEBUG: Vérifier ce que contient $prets
-// echo "<pre>"; print_r($prets); echo "</pre>";
-
-// RÉCUPÉRER LES EMPRUNTEURS POUR CHAQUE LIVRE
-$emprunteursStmt = $conn->prepare("
-    SELECT o.id_ouvrage, u.nom, u.prenom
-    FROM ouvrage o
-    JOIN etre e ON o.id_ouvrage = e.id_ouvrage
-    JOIN pret p ON e.id_pret = p.id_pret
-    LEFT JOIN realiser r ON p.id_pret = r.id_pret
-    LEFT JOIN badge b ON r.id_badge = b.id_badge
-    LEFT JOIN utilisateur u ON b.id_utilisateur = u.id_utilisateur
-    WHERE p.date_retour_effectif IS NULL
-");
-$emprunteursStmt->execute();
-$emprunteurs = $emprunteursStmt->fetchAll(PDO::FETCH_ASSOC);
-
-// Créer un tableau associatif pour trouver rapidement l'emprunteur d'un ouvrage
-$emprunteursParOuvrage = [];
-foreach ($emprunteurs as $emprunteur) {
-    if ($emprunteur['id_ouvrage'] && $emprunteur['nom']) {
-        $emprunteursParOuvrage[$emprunteur['id_ouvrage']] = $emprunteur;
-    }
-}
+    ORDER BY o.titre
+")->fetchAll(PDO::FETCH_ASSOC);
 
 // STATISTIQUES
-$statsStmt = $conn->prepare("
+$stats = $conn->query("
     SELECT 
-        (SELECT COUNT(*) FROM ouvrage) as total_ouvrages,
-        (SELECT COUNT(*) FROM pret WHERE date_retour_effectif IS NULL) as prets_en_cours,
-        (SELECT COUNT(*) FROM pret WHERE date_retour_effectif IS NULL 
-         AND CURDATE() > COALESCE(prolongation, DATE_ADD(date_pret, INTERVAL 14 DAY))) as prets_en_retard,
-        (SELECT SUM(reserver) FROM exemplaire) as livres_reserves,
-        (SELECT SUM(stock) FROM exemplaire) as exemplaires_disponibles
-");
-$statsStmt->execute();
-$stats = $statsStmt->fetch(PDO::FETCH_ASSOC);
+        (SELECT COUNT(*) FROM utilisateur WHERE id_statut = 4) as total_eleves,
+        (SELECT COUNT(*) FROM utilisateur WHERE id_statut = 3) as total_profs,
+        (SELECT COUNT(*) FROM badge WHERE etat = 'actif') as badges_actifs,
+        (SELECT COUNT(*) FROM badge WHERE date_expiration < CURDATE()) as badges_expires,
+        (SELECT COUNT(*) FROM utilisateur WHERE id_badge IS NULL) as sans_badge,
+        (SELECT COUNT(*) FROM ouvrage) as total_livres,
+        (SELECT COUNT(*) FROM pret WHERE date_retour_effectif IS NULL) as prets_encours,
+        (SELECT COUNT(*) FROM pret WHERE date_retour_effectif IS NULL AND CURDATE() > COALESCE(prolongation, DATE_ADD(date_pret, INTERVAL 14 DAY))) as prets_retard
+")->fetch(PDO::FETCH_ASSOC);
+
+// Vérifier QR codes existants
+$qr_folder = '../assets/qr_codes/';
+$qr_count = file_exists($qr_folder) ? count(glob($qr_folder . '*.png')) : 0;
+$qr_files = file_exists($qr_folder) ? scandir($qr_folder) : [];
+
+// Récupérer un utilisateur spécifique pour édition
+$userToEdit = null;
+if (isset($_GET['edit']) && is_numeric($_GET['edit'])) {
+    $editStmt = $conn->prepare("SELECT * FROM utilisateur WHERE id_utilisateur = ?");
+    $editStmt->execute([$_GET['edit']]);
+    $userToEdit = $editStmt->fetch(PDO::FETCH_ASSOC);
+    if ($userToEdit) {
+        $activeTab = 'utilisateurs';
+    }
+}
 ?>
 
 <!DOCTYPE html>
@@ -309,8 +454,10 @@ $stats = $statsStmt->fetch(PDO::FETCH_ASSOC);
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Gestion Bibliothèque - GESTION ACCES</title>
+    <title>Administration Globale - GESTION ACCÈS</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <style>
+        /* ==================== STYLES ==================== */
         * {
             margin: 0;
             padding: 0;
@@ -330,6 +477,7 @@ $stats = $statsStmt->fetch(PDO::FETCH_ASSOC);
             margin-left: 250px;
         }
 
+        /* HEADER */
         .header {
             background: linear-gradient(135deg, #0e1f4c 0%, #1a3a7a 100%);
             color: white;
@@ -347,14 +495,15 @@ $stats = $statsStmt->fetch(PDO::FETCH_ASSOC);
             gap: 10px;
         }
 
-        .stats-mini {
+        /* STATISTIQUES */
+        .stats-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
             gap: 20px;
             margin-bottom: 30px;
         }
 
-        .stat-mini-card {
+        .stat-card {
             background: white;
             padding: 20px;
             border-radius: 10px;
@@ -364,41 +513,49 @@ $stats = $statsStmt->fetch(PDO::FETCH_ASSOC);
             transition: transform 0.3s;
         }
 
-        .stat-mini-card:hover {
+        .stat-card:hover {
             transform: translateY(-3px);
         }
 
-        .stat-mini-card.ouvrages {
+        .stat-card.eleves {
             border-color: #28a745;
         }
 
-        .stat-mini-card.prets {
+        .stat-card.profs {
             border-color: #17a2b8;
         }
 
-        .stat-mini-card.retard {
-            border-color: #dc3545;
-        }
-
-        .stat-mini-card.reserves {
+        .stat-card.badges {
             border-color: #ffc107;
         }
 
-        .stat-mini-card.dispo {
+        .stat-card.livres {
+            border-color: #0e1f4c;
+        }
+
+        .stat-card.qr {
             border-color: #6f42c1;
         }
 
-        .stat-mini-card h3 {
+        .stat-number {
             font-size: 32px;
+            font-weight: bold;
             color: #0e1f4c;
             margin-bottom: 5px;
         }
 
-        .stat-mini-card p {
+        .stat-label {
             color: #666;
             font-size: 14px;
         }
 
+        .stat-sub {
+            font-size: 12px;
+            color: #999;
+            margin-top: 8px;
+        }
+
+        /* TABS */
         .tabs {
             display: flex;
             background: white;
@@ -406,6 +563,7 @@ $stats = $statsStmt->fetch(PDO::FETCH_ASSOC);
             padding: 5px;
             margin-bottom: 25px;
             box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+            flex-wrap: wrap;
         }
 
         .tab {
@@ -420,6 +578,11 @@ $stats = $statsStmt->fetch(PDO::FETCH_ASSOC);
             border-radius: 8px;
             transition: all 0.3s;
             font-size: 15px;
+            min-width: 120px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
         }
 
         .tab.active {
@@ -432,6 +595,7 @@ $stats = $statsStmt->fetch(PDO::FETCH_ASSOC);
             background: #f8f9fa;
         }
 
+        /* CONTENU DES TABS */
         .tab-content {
             display: none;
             animation: fadeIn 0.4s;
@@ -453,118 +617,73 @@ $stats = $statsStmt->fetch(PDO::FETCH_ASSOC);
             }
         }
 
-        .badge {
-            padding: 5px 12px;
-            border-radius: 20px;
-            font-size: 12px;
-            font-weight: 600;
-            display: inline-block;
-            margin-right: 5px;
-        }
-
-        .badge-disponible {
-            background: #28a745;
-            color: white;
-        }
-
-        .badge-indisponible {
-            background: #6c757d;
-            color: white;
-        }
-
-        .badge-reserve {
-            background: #ffc107;
-            color: #212529;
-        }
-
-        .badge-retard {
-            background: #dc3545;
-            color: white;
-        }
-
-        .badge-prolonge {
-            background: #17a2b8;
-            color: white;
-        }
-
-        .ouvrage-card {
+        /* CARTES */
+        .card {
             background: white;
             border-radius: 12px;
             padding: 25px;
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
-            margin-bottom: 20px;
-            border-left: 5px solid #0e1f4c;
-            transition: transform 0.3s, box-shadow 0.3s;
-        }
-
-        .ouvrage-card:hover {
-            transform: translateY(-3px);
-            box-shadow: 0 8px 16px rgba(0, 0, 0, 0.1);
-        }
-
-        .ouvrage-card h3 {
-            color: #0e1f4c;
-            margin-bottom: 10px;
-            font-size: 18px;
-        }
-
-        .ouvrage-card p {
-            color: #666;
-            margin-bottom: 5px;
-            font-size: 14px;
-        }
-
-        .search-container {
-            background: white;
-            border-radius: 10px;
-            padding: 20px;
             margin-bottom: 25px;
-            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
         }
 
-        .search-form {
+        .card-header {
             display: flex;
-            gap: 15px;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            padding-bottom: 15px;
+            border-bottom: 2px solid #f0f0f0;
         }
 
-        .search-input {
-            flex: 1;
-            padding: 14px 18px;
-            border: 2px solid #e0e4e8;
-            border-radius: 8px;
-            font-size: 16px;
-            transition: border-color 0.3s;
-        }
-
-        .search-input:focus {
-            outline: none;
-            border-color: #0e1f4c;
-        }
-
-        .search-btn {
-            background: #0e1f4c;
-            color: white;
-            border: none;
-            padding: 14px 28px;
-            border-radius: 8px;
-            cursor: pointer;
-            font-weight: 600;
-            transition: background 0.3s;
+        .card-header h2 {
+            color: #0e1f4c;
+            font-size: 18px;
             display: flex;
             align-items: center;
             gap: 8px;
         }
 
-        .search-btn:hover {
-            background: #1a3a7a;
-        }
-
-        .grid-ouvrages {
+        /* FORMULAIRES */
+        .form-row {
             display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(350px, 1fr));
-            gap: 25px;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            margin-bottom: 20px;
         }
 
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 8px;
+            color: #0e1f4c;
+            font-weight: 600;
+        }
+
+        .form-control {
+            width: 100%;
+            padding: 12px 15px;
+            border: 2px solid #e0e4e8;
+            border-radius: 8px;
+            font-size: 14px;
+            transition: border-color 0.3s;
+        }
+
+        .form-control:focus {
+            outline: none;
+            border-color: #0e1f4c;
+        }
+
+        .form-check {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin: 10px 0;
+        }
+
+        /* BOUTONS */
         .btn {
             padding: 10px 20px;
             border-radius: 6px;
@@ -576,63 +695,102 @@ $stats = $statsStmt->fetch(PDO::FETCH_ASSOC);
             display: inline-flex;
             align-items: center;
             gap: 8px;
-            margin-top: 10px;
-            margin-right: 10px;
+            margin-right: 5px;
+            margin-bottom: 5px;
+            text-decoration: none;
         }
 
-        .btn-emprunter {
+        .btn-sm {
+            padding: 8px 16px;
+            font-size: 13px;
+        }
+
+        .btn-primary {
             background: #0e1f4c;
             color: white;
         }
 
-        .btn-emprunter:hover {
+        .btn-primary:hover {
             background: #1a3a7a;
             transform: translateY(-2px);
         }
 
-        .btn-emprunter:disabled {
-            background: #ccc;
-            cursor: not-allowed;
-            transform: none;
-        }
-
-        .btn-reserver {
-            background: #ffc107;
-            color: #212529;
-        }
-
-        .btn-reserver:hover {
-            background: #e0a800;
-            transform: translateY(-2px);
-        }
-
-        .btn-annuler-resa {
-            background: #6c757d;
-            color: white;
-        }
-
-        .btn-annuler-resa:hover {
-            background: #5a6268;
-        }
-
-        .btn-retourner {
+        .btn-success {
             background: #28a745;
             color: white;
         }
 
-        .btn-retourner:hover {
+        .btn-success:hover {
             background: #218838;
         }
 
-        .btn-prolonger {
+        .btn-warning {
+            background: #ffc107;
+            color: #212529;
+        }
+
+        .btn-warning:hover {
+            background: #e0a800;
+        }
+
+        .btn-info {
             background: #17a2b8;
             color: white;
         }
 
-        .btn-prolonger:hover {
-            background: #138496;
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
         }
 
+        /* BADGES */
+        .badge {
+            padding: 5px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+            display: inline-block;
+            margin-right: 5px;
+            margin-bottom: 5px;
+        }
+
+        .badge-actif {
+            background: #28a745;
+            color: white;
+        }
+
+        .badge-inactif {
+            background: #dc3545;
+            color: white;
+        }
+
+        .badge-expire {
+            background: #ffc107;
+            color: #212529;
+        }
+
+        .badge-eleve {
+            background: #17a2b8;
+            color: white;
+        }
+
+        .badge-prof {
+            background: #6f42c1;
+            color: white;
+        }
+
+        .badge-admin {
+            background: #0e1f4c;
+            color: white;
+        }
+
+        .badge-code-barre {
+            background: #0e1f4c;
+            color: white;
+            font-family: monospace;
+        }
+
+        /* TABLEAUX */
         .table-container {
             background: white;
             border-radius: 12px;
@@ -664,62 +822,7 @@ $stats = $statsStmt->fetch(PDO::FETCH_ASSOC);
             background: #f8f9fa;
         }
 
-        .row-retard {
-            background: #ffe6e6 !important;
-            border-left: 4px solid #dc3545;
-        }
-
-        .form-ajout {
-            background: white;
-            border-radius: 12px;
-            padding: 30px;
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
-            max-width: 600px;
-            margin: 0 auto;
-        }
-
-        .form-group {
-            margin-bottom: 20px;
-        }
-
-        .form-group label {
-            display: block;
-            margin-bottom: 8px;
-            color: #0e1f4c;
-            font-weight: 600;
-        }
-
-        .form-control {
-            width: 100%;
-            padding: 14px;
-            border: 2px solid #e0e4e8;
-            border-radius: 8px;
-            font-size: 16px;
-            transition: border-color 0.3s;
-        }
-
-        .form-control:focus {
-            outline: none;
-            border-color: #0e1f4c;
-        }
-
-        .btn-submit {
-            background: #0e1f4c;
-            color: white;
-            padding: 15px 30px;
-            border: none;
-            border-radius: 8px;
-            cursor: pointer;
-            font-weight: 600;
-            font-size: 16px;
-            width: 100%;
-            transition: background 0.3s;
-        }
-
-        .btn-submit:hover {
-            background: #1a3a7a;
-        }
-
+        /* MESSAGES */
         .alert {
             padding: 15px;
             border-radius: 8px;
@@ -741,55 +844,146 @@ $stats = $statsStmt->fetch(PDO::FETCH_ASSOC);
             border-left: 4px solid #dc3545;
         }
 
-        .action-buttons {
-            display: flex;
-            gap: 10px;
-            flex-wrap: wrap;
+        /* BADGE INFO CARD */
+        .badge-info-card {
+            background: #e8f4fd;
+            border-left: 4px solid #0e1f4c;
+            padding: 15px;
+            border-radius: 8px;
+            margin: 10px 0;
         }
 
-        .date-info {
-            font-size: 13px;
+        .badge-details {
+            font-size: 12px;
             color: #666;
             margin-top: 5px;
         }
 
-        .livre-info {
-            background: #f8f9fa;
-            padding: 15px;
-            border-radius: 8px;
-            margin: 10px 0;
-        }
-
-        .emprunteur-info {
-            background: #e8f4fd;
-            padding: 10px;
-            border-radius: 6px;
-            margin-top: 10px;
-            font-size: 14px;
-        }
-
-        .reservation-count {
-            font-weight: bold;
-            color: #e0a800;
-        }
-
-        .user-badge {
-            display: inline-flex;
+        /* MODAL */
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.5);
+            z-index: 1000;
             align-items: center;
-            background: #0e1f4c;
-            color: white;
-            padding: 3px 8px;
-            border-radius: 4px;
-            font-size: 12px;
-            margin-left: 5px;
+            justify-content: center;
         }
 
-        .debug-info {
-            background: #f8f9fa;
+        .modal-content {
+            background: white;
+            border-radius: 12px;
+            padding: 30px;
+            width: 90%;
+            max-width: 500px;
+            max-height: 80vh;
+            overflow-y: auto;
+        }
+
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+
+        .modal-header h3 {
+            color: #0e1f4c;
+        }
+
+        .modal-close {
+            background: none;
+            border: none;
+            font-size: 24px;
+            cursor: pointer;
+            color: #666;
+        }
+
+        /* VERIFICATION IDENTIFIANT */
+        .identifiant-unique-info {
+            color: #28a745;
+            font-size: 13px;
+            margin-top: 5px;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+
+        .identifiant-pris-info {
+            color: #dc3545;
+            font-size: 13px;
+            margin-top: 5px;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+
+        /* QR CODE */
+        .qr-code-container {
+            margin: 15px 0;
             padding: 15px;
+            background: #f8f9fa;
             border-radius: 8px;
-            margin: 10px 0;
+            text-align: center;
+        }
+
+        .qr-code-image {
+            max-width: 150px;
+            max-height: 150px;
+            border: 2px solid #ddd;
+            border-radius: 8px;
+            padding: 5px;
+            background: white;
+        }
+
+        .qr-code-actions {
+            display: flex;
+            gap: 10px;
+            justify-content: center;
+            margin-top: 10px;
+            flex-wrap: wrap;
+        }
+
+        /* GRILLE POUR LIVRES */
+        .grid-2 {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 20px;
+        }
+
+        /* CODE BARRE AFFICHAGE */
+        .code-barre-display {
+            background: #f8f9fa;
+            padding: 8px 12px;
+            border-radius: 6px;
             font-family: monospace;
+            font-size: 14px;
+            color: #0e1f4c;
+            border: 1px dashed #0e1f4c;
+            display: inline-block;
+            margin: 5px 0;
+        }
+
+        @media (max-width: 768px) {
+            .main-content {
+                margin-left: 0;
+                padding: 20px;
+            }
+
+            .grid-2 {
+                grid-template-columns: 1fr;
+            }
+
+            .tabs {
+                flex-direction: column;
+            }
+
+            .tab {
+                width: 100%;
+            }
         }
     </style>
 </head>
@@ -798,252 +992,337 @@ $stats = $statsStmt->fetch(PDO::FETCH_ASSOC);
     <?php include '../includes/sidebar.php'; ?>
 
     <div class="main-content">
+        <!-- HEADER -->
         <div class="header">
-            <h1>📚 Gestion du distributeur/Interface Documentaliste</h1>
-            <p>Gérez les livres, les prêts et les réservations</p>
+            <h1><i class="fas fa-crown"></i> Administration Globale</h1>
+            <p>Gestion centralisée des utilisateurs, badges, livres et QR codes</p>
         </div>
 
         <!-- MESSAGES -->
         <?php if ($message): ?>
             <div class="alert alert-success">
-                ✅ <?= htmlspecialchars($message) ?>
+                <i class="fas fa-check-circle"></i> <?= $message ?>
             </div>
         <?php endif; ?>
 
         <?php if ($errorMessage): ?>
             <div class="alert alert-error">
-                ❌ <?= htmlspecialchars($errorMessage) ?>
+                <i class="fas fa-exclamation-circle"></i> <?= htmlspecialchars($errorMessage) ?>
             </div>
         <?php endif; ?>
 
-        <!-- STATISTIQUES -->
-        <div class="stats-mini">
-            <div class="stat-mini-card ouvrages">
-                <h3><?= $stats['total_ouvrages'] ?? 0 ?></h3>
-                <p>Livres au catalogue</p>
+        <!-- STATISTIQUES GLOBALES -->
+        <div class="stats-grid">
+            <div class="stat-card eleves">
+                <div class="stat-number"><?= $stats['total_eleves'] ?? 0 ?></div>
+                <div class="stat-label">Élèves</div>
+                <div class="stat-sub">👨‍🏫 <?= $stats['total_profs'] ?? 0 ?> professeurs</div>
             </div>
-            <div class="stat-mini-card prets">
-                <h3><?= $stats['prets_en_cours'] ?? 0 ?></h3>
-                <p>Prêts en cours</p>
+
+            <div class="stat-card badges">
+                <div class="stat-number"><?= $stats['badges_actifs'] ?? 0 ?></div>
+                <div class="stat-label">Badges actifs</div>
+                <div class="stat-sub">
+                    ⚠️ <?= $stats['badges_expires'] ?? 0 ?> expirés |
+                    ❌ <?= $stats['sans_badge'] ?? 0 ?> sans badge
+                </div>
             </div>
-            <div class="stat-mini-card retard">
-                <h3><?= $stats['prets_en_retard'] ?? 0 ?></h3>
-                <p>Prêts en retard</p>
+
+            <div class="stat-card livres">
+                <div class="stat-number"><?= $stats['total_livres'] ?? 0 ?></div>
+                <div class="stat-label">Livres</div>
+                <div class="stat-sub">
+                    📦 <?= $stats['prets_encours'] ?? 0 ?> prêts |
+                    ⚠️ <?= $stats['prets_retard'] ?? 0 ?> retards
+                </div>
             </div>
-            <div class="stat-mini-card reserves">
-                <h3><?= $stats['livres_reserves'] ?? 0 ?></h3>
-                <p>Livres réservés</p>
-            </div>
-            <div class="stat-mini-card dispo">
-                <h3><?= $stats['exemplaires_disponibles'] ?? 0 ?></h3>
-                <p>Exemplaires dispo</p>
+
+            <div class="stat-card qr">
+                <div class="stat-number"><?= $qr_count ?></div>
+                <div class="stat-label">QR codes</div>
+                <div class="stat-sub">📱 Prêts à imprimer</div>
             </div>
         </div>
 
-        <!-- ONGLETS -->
+        <!-- TABS PRINCIPAUX -->
         <div class="tabs">
-            <button class="tab active" onclick="showTab('ouvrages')">📖 Livres</button>
-            <button class="tab" onclick="showTab('prets')">🔄 Prêts en cours</button>
-            <button class="tab" onclick="showTab('ajout')">➕ Ajouter un livre</button>
+            <button class="tab <?= $activeTab == 'dashboard' ? 'active' : '' ?>" onclick="showTab('dashboard')">
+                <i class="fas fa-chart-pie"></i> Dashboard
+            </button>
+            <button class="tab <?= $activeTab == 'utilisateurs' ? 'active' : '' ?>" onclick="showTab('utilisateurs')">
+                <i class="fas fa-users"></i> Utilisateurs
+            </button>
+            <button class="tab <?= $activeTab == 'badges' ? 'active' : '' ?>" onclick="showTab('badges')">
+                <i class="fas fa-id-card"></i> Badges
+            </button>
+            <button class="tab <?= $activeTab == 'livres' ? 'active' : '' ?>" onclick="showTab('livres')">
+                <i class="fas fa-book"></i> Livres & QR
+            </button>
+            <button class="tab <?= $activeTab == 'classes' ? 'active' : '' ?>" onclick="showTab('classes')">
+                <i class="fas fa-school"></i> Classes
+            </button>
         </div>
 
-        <!-- ONGLET 1: LIVRES -->
-        <div id="tab-ouvrages" class="tab-content active">
-            <div class="search-container">
-                <form method="GET" class="search-form">
-                    <input type="text" name="search" class="search-input"
-                        value="<?= htmlspecialchars($search) ?>"
-                        placeholder="Rechercher un livre par titre, code barre ou cote...">
-                    <button type="submit" class="search-btn">
-                        🔍 Rechercher
-                    </button>
-                    <?php if (!empty($search)): ?>
-                        <a href="?search=" class="btn" style="background: #dc3545; color: white;">✖ Effacer</a>
+        <!-- TAB 1: DASHBOARD -->
+        <div id="tab-dashboard" class="tab-content <?= $activeTab == 'dashboard' ? 'active' : '' ?>">
+            <div class="card">
+                <div class="card-header">
+                    <h2><i class="fas fa-rocket"></i> Actions rapides</h2>
+                </div>
+                <div class="grid-2">
+                    <a href="?tab=utilisateurs" class="btn btn-primary" style="justify-content: center; padding: 20px;">
+                        <i class="fas fa-user-plus"></i> Ajouter un utilisateur
+                    </a>
+                    <a href="?tab=livres" class="btn btn-success" style="justify-content: center; padding: 20px;">
+                        <i class="fas fa-plus"></i> Ajouter un livre
+                    </a>
+                    <a href="gestion_bibliotheque.php" class="btn btn-info" style="justify-content: center; padding: 20px;">
+                        <i class="fas fa-qrcode"></i> Scanner des QR codes
+                    </a>
+                    <a href="edt.php" class="btn btn-warning" style="justify-content: center; padding: 20px;">
+                        <i class="fas fa-calendar"></i> Voir l'EDT
+                    </a>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <h2><i class="fas fa-exclamation-triangle"></i> Alertes et notifications</h2>
+                </div>
+                <div style="display: flex; flex-direction: column; gap: 10px;">
+                    <?php if (($stats['badges_expires'] ?? 0) > 0): ?>
+                        <div style="background: #fff3cd; padding: 15px; border-radius: 8px; border-left: 4px solid #ffc107;">
+                            ⚠️ <strong><?= $stats['badges_expires'] ?> badge(s) expiré(s)</strong> - Pensez à les renouveler
+                        </div>
                     <?php endif; ?>
-                </form>
+
+                    <?php if (($stats['prets_retard'] ?? 0) > 0): ?>
+                        <div style="background: #f8d7da; padding: 15px; border-radius: 8px; border-left: 4px solid #dc3545;">
+                            📚 <strong><?= $stats['prets_retard'] ?> prêt(s) en retard</strong> - Relancez les emprunteurs
+                        </div>
+                    <?php endif; ?>
+
+                    <?php if (($stats['sans_badge'] ?? 0) > 0): ?>
+                        <div style="background: #e2e3e5; padding: 15px; border-radius: 8px; border-left: 4px solid #6c757d;">
+                            🪪 <strong><?= $stats['sans_badge'] ?> utilisateur(s) sans badge</strong> - Créez-leur un badge
+                        </div>
+                    <?php endif; ?>
+
+                    <?php if (($stats['badges_expires'] ?? 0) == 0 && ($stats['prets_retard'] ?? 0) == 0 && ($stats['sans_badge'] ?? 0) == 0): ?>
+                        <div style="background: #d4edda; padding: 15px; border-radius: 8px; border-left: 4px solid #28a745;">
+                            ✅ Tout est en ordre ! Aucune alerte à signaler.
+                        </div>
+                    <?php endif; ?>
+                </div>
             </div>
 
-            <div class="grid-ouvrages">
-                <?php foreach ($ouvrages as $ouvrage): ?>
-                    <?php
-                    $disponible = ($ouvrage['total_stock'] > 0);
-                    $reserve = ($ouvrage['total_reserver'] > 0);
-                    $stock_dispo = $ouvrage['total_stock'] - $ouvrage['total_reserver'];
-                    $emprunteur = isset($emprunteursParOuvrage[$ouvrage['id_ouvrage']]) ? $emprunteursParOuvrage[$ouvrage['id_ouvrage']] : null;
-                    ?>
-                    <div class="ouvrage-card">
-                        <h3><?= htmlspecialchars($ouvrage['titre']) ?></h3>
-
-                        <!-- BADGES DE STATUT -->
-                        <div style="margin-bottom: 15px;">
-                            <?php if ($disponible && $stock_dispo > 0): ?>
-                                <span class="badge badge-disponible">
-                                    ✅ <?= $stock_dispo ?> exemplaire(s) disponible(s)
-                                </span>
-                            <?php else: ?>
-                                <span class="badge badge-indisponible">
-                                    ❌ Indisponible
-                                </span>
-                            <?php endif; ?>
-
-                            <?php if ($reserve): ?>
-                                <span class="badge badge-reserve">
-                                    🔔 <?= $ouvrage['total_reserver'] ?> réservation(s)
-                                </span>
-                            <?php endif; ?>
-                        </div>
-
-                        <!-- INFOS DU LIVRE -->
-                        <p><strong>📋 Code barre:</strong> <?= htmlspecialchars($ouvrage['code_barre']) ?></p>
-                        <p><strong>🏷️ Cote:</strong> <?= htmlspecialchars($ouvrage['cote']) ?></p>
-                        <p><strong>📝 État:</strong> <?= htmlspecialchars($ouvrage['etat']) ?></p>
-
-                        <!-- EMPRUNTEUR ACTUEL -->
-                        <?php if ($emprunteur): ?>
-                            <div class="emprunteur-info">
-                                <strong>👤 Emprunté par:</strong>
-                                <?= htmlspecialchars($emprunteur['prenom']) ?>
-                                <?= htmlspecialchars($emprunteur['nom']) ?>
-                            </div>
-                        <?php endif; ?>
-
-                        <!-- ACTIONS -->
-                        <div class="action-buttons">
-                            <form method="POST" onsubmit="return confirmEmprunt()">
-                                <input type="hidden" name="id_ouvrage" value="<?= $ouvrage['id_ouvrage'] ?>">
-                                <button type="submit" name="enregistrer_pret"
-                                    class="btn btn-emprunter"
-                                    <?= !$disponible || $stock_dispo <= 0 ? 'disabled' : '' ?>
-                                    title="<?= !$disponible ? 'Plus d\'exemplaires disponibles' : '' ?>">
-                                    📚 Emprunter
-                                </button>
-                            </form>
-
-                            <form method="POST" onsubmit="return confirmReservation()">
-                                <input type="hidden" name="id_ouvrage" value="<?= $ouvrage['id_ouvrage'] ?>">
-                                <button type="submit" name="reserver_livre"
-                                    class="btn btn-reserver"
-                                    <?= !$disponible ? 'disabled' : '' ?>
-                                    title="<?= !$disponible ? 'Plus d\'exemplaires disponibles' : '' ?>">
-                                    🔔 Réserver
-                                </button>
-                            </form>
-
-                            <?php if ($reserve): ?>
-                                <form method="POST" onsubmit="return confirmAnnulation()">
-                                    <input type="hidden" name="id_ouvrage" value="<?= $ouvrage['id_ouvrage'] ?>">
-                                    <button type="submit" name="annuler_reservation"
-                                        class="btn btn-annuler-resa">
-                                        ❌ Annuler réservation
-                                    </button>
-                                </form>
-                            <?php endif; ?>
-                        </div>
-                    </div>
-                <?php endforeach; ?>
-            </div>
-        </div>
-
-        <!-- ONGLET 2: PRÊTS EN COURS -->
-        <div id="tab-prets" class="tab-content">
-            <div class="table-container">
-                <?php if (empty($prets)): ?>
-                    <div style="text-align: center; color: #666; padding: 30px;">
-                        <p>Aucun prêt en cours pour le moment.</p>
-                        <p class="date-info">(Vérifiez que vous avez bien des prêts enregistrés dans la base de données)</p>
-                        <!-- DEBUG: Afficher le nombre de prêts trouvés -->
-                        <div class="debug-info">
-                            Nombre de prêts trouvés: <?= count($prets) ?><br>
-                            <?php if (count($prets) > 0): ?>
-                                Premier prêt: <?= htmlspecialchars($prets[0]['titre'] ?? 'N/A') ?>
-                            <?php endif; ?>
-                        </div>
-                    </div>
-                <?php else: ?>
+            <div class="card">
+                <div class="card-header">
+                    <h2><i class="fas fa-clock"></i> Derniers utilisateurs inscrits</h2>
+                </div>
+                <div class="table-container">
                     <table class="users-table">
                         <thead>
                             <tr>
-                                <th>Livre</th>
-                                <th>Emprunteur</th>
-                                <th>Date emprunt</th>
-                                <th>Date limite</th>
-                                <th>Prolongation</th>
+                                <th>Nom</th>
+                                <th>Identifiant</th>
                                 <th>Statut</th>
+                                <th>Classe</th>
+                                <th>Badge</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <?php
+                            $recent_users = array_slice($utilisateurs, 0, 5);
+                            foreach ($recent_users as $user):
+                                $badge_actif = ($user['etat_badge'] == 'actif' && strtotime($user['date_expiration']) > time());
+                            ?>
+                                <tr>
+                                    <td><strong><?= htmlspecialchars($user['prenom']) ?> <?= htmlspecialchars($user['nom']) ?></strong></td>
+                                    <td><code><?= htmlspecialchars($user['identifiant']) ?></code></td>
+                                    <td>
+                                        <?php if ($user['id_statut'] == 1): ?>
+                                            <span class="badge badge-admin">Admin</span>
+                                        <?php elseif ($user['id_statut'] == 3): ?>
+                                            <span class="badge badge-prof">Professeur</span>
+                                        <?php elseif ($user['id_statut'] == 4): ?>
+                                            <span class="badge badge-eleve">Élève</span>
+                                        <?php endif; ?>
+                                    </td>
+                                    <td><?= $user['classe_nom'] ?? '-' ?></td>
+                                    <td>
+                                        <?php if ($user['id_badge']): ?>
+                                            <?php if ($badge_actif): ?>
+                                                <span class="badge badge-actif">✅ Actif</span>
+                                            <?php else: ?>
+                                                <span class="badge badge-expire">⚠️ Expiré</span>
+                                            <?php endif; ?>
+                                        <?php else: ?>
+                                            <span class="badge badge-inactif">❌ Aucun</span>
+                                        <?php endif; ?>
+                                    </td>
+                                </tr>
+                            <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- TAB 2: UTILISATEURS -->
+        <div id="tab-utilisateurs" class="tab-content <?= $activeTab == 'utilisateurs' ? 'active' : '' ?>">
+
+            <!-- Formulaire d'ajout d'élève -->
+            <div class="card">
+                <div class="card-header">
+                    <h2><i class="fas fa-user-graduate"></i> Ajouter un élève</h2>
+                </div>
+
+                <div class="badge-info-card">
+                    <strong>ℹ️ Information :</strong> Un badge actif sera automatiquement créé pour cet élève avec une validité de 2 ans.
+                </div>
+
+                <form method="POST">
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Nom *</label>
+                            <input type="text" name="nom" class="form-control" required>
+                        </div>
+                        <div class="form-group">
+                            <label>Prénom *</label>
+                            <input type="text" name="prenom" class="form-control" required>
+                        </div>
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Identifiant *</label>
+                            <input type="text" name="identifiant" class="form-control" required>
+                        </div>
+                        <div class="form-group">
+                            <label>Mot de passe *</label>
+                            <input type="password" name="mot_de_pass" class="form-control" required minlength="6">
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Classe *</label>
+                        <select name="id_classe" class="form-control" required>
+                            <option value="">Sélectionner une classe</option>
+                            <?php foreach ($classes as $classe): ?>
+                                <option value="<?= $classe['id_classe'] ?>"><?= htmlspecialchars($classe['libelle']) ?></option>
+                            <?php endforeach; ?>
+                        </select>
+                    </div>
+
+                    <button type="submit" name="ajouter_eleve" class="btn btn-primary">
+                        <i class="fas fa-plus"></i> Ajouter l'élève et créer son badge
+                    </button>
+                </form>
+            </div>
+
+            <!-- Formulaire d'ajout de professeur -->
+            <div class="card">
+                <div class="card-header">
+                    <h2><i class="fas fa-chalkboard-teacher"></i> Ajouter un professeur</h2>
+                </div>
+
+                <div class="badge-info-card">
+                    <strong>ℹ️ Information :</strong> Un badge actif sera automatiquement créé pour ce professeur avec une validité de 2 ans.
+                </div>
+
+                <form method="POST">
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Nom *</label>
+                            <input type="text" name="nom_prof" class="form-control" required>
+                        </div>
+                        <div class="form-group">
+                            <label>Prénom *</label>
+                            <input type="text" name="prenom_prof" class="form-control" required>
+                        </div>
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Identifiant *</label>
+                            <input type="text" name="identifiant_prof" class="form-control" required>
+                        </div>
+                        <div class="form-group">
+                            <label>Mot de passe *</label>
+                            <input type="password" name="mot_de_pass_prof" class="form-control" required minlength="6">
+                        </div>
+                    </div>
+
+                    <button type="submit" name="ajouter_professeur" class="btn btn-primary">
+                        <i class="fas fa-plus"></i> Ajouter le professeur et créer son badge
+                    </button>
+                </form>
+            </div>
+
+            <!-- Liste des utilisateurs -->
+            <div class="card">
+                <div class="card-header">
+                    <h2><i class="fas fa-list"></i> Liste des utilisateurs</h2>
+                    <form method="GET" style="display: flex; gap: 10px;">
+                        <input type="hidden" name="tab" value="utilisateurs">
+                        <input type="text" name="search" class="form-control" placeholder="Rechercher..." style="width: 200px;">
+                        <button type="submit" class="btn btn-sm btn-primary">🔍</button>
+                    </form>
+                </div>
+
+                <div class="table-container">
+                    <table class="users-table">
+                        <thead>
+                            <tr>
+                                <th>Nom</th>
+                                <th>Identifiant</th>
+                                <th>Statut</th>
+                                <th>Classe</th>
+                                <th>Badge</th>
                                 <th>Actions</th>
                             </tr>
                         </thead>
                         <tbody>
-                            <?php foreach ($prets as $pret): ?>
-                                <?php
-                                // Utiliser la date limite calculée
-                                $date_limite = $pret['date_limite_finale'];
-                                $prolongation = $pret['prolongation'] ? date('d/m/Y', strtotime($pret['prolongation'])) : null;
-                                $en_retard = $pret['jours_restants'] < 0;
-                                ?>
-                                <tr class="<?= $en_retard ? 'row-retard' : '' ?>">
+                            <?php foreach ($utilisateurs as $user):
+                                $badge_actif = ($user['etat_badge'] == 'actif' && strtotime($user['date_expiration']) > time());
+                            ?>
+                                <tr>
+                                    <td><strong><?= htmlspecialchars($user['prenom']) ?> <?= htmlspecialchars($user['nom']) ?></strong></td>
+                                    <td><code><?= htmlspecialchars($user['identifiant']) ?></code></td>
                                     <td>
-                                        <strong><?= htmlspecialchars($pret['titre'] ?? 'Livre inconnu') ?></strong><br>
-                                        <small class="date-info"><?= $pret['code_barre'] ?? 'N/A' ?></small>
-                                    </td>
-                                    <td>
-                                        <?php if (!empty($pret['nom'])): ?>
-                                            <strong><?= htmlspecialchars($pret['prenom'] ?? '') ?> <?= htmlspecialchars($pret['nom']) ?></strong><br>
-                                            <small class="date-info"><?= $pret['identifiant'] ?? 'N/A' ?></small>
-                                        <?php else: ?>
-                                            <span style="color: #666;">Utilisateur inconnu</span>
+                                        <?php if ($user['id_statut'] == 1): ?>
+                                            <span class="badge badge-admin">Admin</span>
+                                        <?php elseif ($user['id_statut'] == 3): ?>
+                                            <span class="badge badge-prof">Professeur</span>
+                                        <?php elseif ($user['id_statut'] == 4): ?>
+                                            <span class="badge badge-eleve">Élève</span>
                                         <?php endif; ?>
                                     </td>
-                                    <td><?= !empty($pret['date_pret']) ? date('d/m/Y', strtotime($pret['date_pret'])) : 'N/A' ?></td>
+                                    <td><?= $user['classe_nom'] ?? '-' ?></td>
                                     <td>
-                                        <?= !empty($date_limite) ? date('d/m/Y', strtotime($date_limite)) : 'N/A' ?>
-                                        <div class="date-info">
-                                            <?php if ($pret['jours_restants'] >= 0): ?>
-                                                <span style="color: #28a745;">
-                                                    ⏱️ <?= $pret['jours_restants'] ?> jour(s) restant(s)
-                                                </span>
+                                        <?php if ($user['id_badge']): ?>
+                                            <?php if ($badge_actif): ?>
+                                                <span class="badge badge-actif">✅ Actif</span>
                                             <?php else: ?>
-                                                <span style="color: #dc3545;">
-                                                    ⚠️ En retard de <?= abs($pret['jours_restants']) ?> jour(s)
-                                                </span>
+                                                <span class="badge badge-expire">⚠️ Expiré</span>
                                             <?php endif; ?>
-                                        </div>
-                                    </td>
-                                    <td>
-                                        <?php if ($prolongation): ?>
-                                            <span class="badge badge-prolonge">
-                                                Jusqu'au <?= $prolongation ?>
-                                            </span>
+                                            <div class="badge-details">
+                                                Exp: <?= $user['date_expiration'] ? date('d/m/Y', strtotime($user['date_expiration'])) : '—' ?>
+                                            </div>
                                         <?php else: ?>
-                                            <span style="color: #666;">Non prolongé</span>
-                                        <?php endif; ?>
-                                    </td>
-                                    <td>
-                                        <?php if ($en_retard): ?>
-                                            <span class="badge badge-retard">EN RETARD</span>
-                                        <?php else: ?>
-                                            <span class="badge badge-disponible">EN COURS</span>
+                                            <span class="badge badge-inactif">❌ Pas de badge</span>
                                         <?php endif; ?>
                                     </td>
                                     <td>
                                         <div class="action-buttons">
-                                            <form method="POST" style="display: inline;">
-                                                <input type="hidden" name="pret_id" value="<?= $pret['id_pret'] ?>">
-                                                <button type="submit" name="retourner_livre"
-                                                    class="btn btn-retourner"
-                                                    onclick="return confirm('Confirmer le retour de ce livre ?')">
-                                                    ✅ Retourner
+                                            <a href="?edit=<?= $user['id_utilisateur'] ?>" class="btn btn-sm btn-warning">
+                                                <i class="fas fa-edit"></i>
+                                            </a>
+                                            <?php if (!$user['id_badge']): ?>
+                                                <button class="btn btn-sm btn-success" onclick="creerBadgeModal(<?= $user['id_utilisateur'] ?>)">
+                                                    <i class="fas fa-plus"></i> Badge
                                                 </button>
-                                            </form>
-
-                                            <?php if (!$pret['prolongation']): ?>
-                                                <form method="POST" style="display: inline;">
-                                                    <input type="hidden" name="pret_id" value="<?= $pret['id_pret'] ?>">
-                                                    <button type="submit" name="prolonger_pret"
-                                                        class="btn btn-prolonger"
-                                                        onclick="return confirm('Prolonger le prêt de 7 jours supplémentaires ?')">
-                                                        ⏱️ Prolonger
-                                                    </button>
-                                                </form>
                                             <?php endif; ?>
                                         </div>
                                     </td>
@@ -1051,119 +1330,363 @@ $stats = $statsStmt->fetch(PDO::FETCH_ASSOC);
                             <?php endforeach; ?>
                         </tbody>
                     </table>
-                <?php endif; ?>
+                </div>
+            </div>
+
+            <!-- MODIFICATION UTILISATEUR -->
+            <?php if ($userToEdit): ?>
+                <div class="card">
+                    <div class="card-header">
+                        <h2><i class="fas fa-edit"></i> Modifier l'utilisateur</h2>
+                        <a href="?tab=utilisateurs" class="btn btn-sm btn-warning">✖ Annuler</a>
+                    </div>
+
+                    <form method="POST">
+                        <input type="hidden" name="id_utilisateur" value="<?= $userToEdit['id_utilisateur'] ?>">
+
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label>Nom *</label>
+                                <input type="text" name="nom" class="form-control" value="<?= htmlspecialchars($userToEdit['nom']) ?>" required>
+                            </div>
+                            <div class="form-group">
+                                <label>Prénom *</label>
+                                <input type="text" name="prenom" class="form-control" value="<?= htmlspecialchars($userToEdit['prenom']) ?>" required>
+                            </div>
+                        </div>
+
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label>Identifiant *</label>
+                                <input type="text" name="identifiant" class="form-control" value="<?= htmlspecialchars($userToEdit['identifiant']) ?>" required>
+                            </div>
+                            <div class="form-group">
+                                <label>Nouveau mot de passe</label>
+                                <input type="password" name="mot_de_pass" class="form-control" placeholder="Laisser vide pour ne pas changer" minlength="6">
+                            </div>
+                        </div>
+
+                        <div class="form-group">
+                            <label>Classe</label>
+                            <select name="id_classe" class="form-control">
+                                <option value="">Aucune classe</option>
+                                <?php foreach ($classes as $classe): ?>
+                                    <option value="<?= $classe['id_classe'] ?>" <?= ($classe['id_classe'] == $userToEdit['id_classe']) ? 'selected' : '' ?>>
+                                        <?= htmlspecialchars($classe['libelle']) ?>
+                                    </option>
+                                <?php endforeach; ?>
+                            </select>
+                        </div>
+
+                        <button type="submit" name="modifier_utilisateur" class="btn btn-primary">
+                            <i class="fas fa-save"></i> Enregistrer les modifications
+                        </button>
+                    </form>
+                </div>
+            <?php endif; ?>
+        </div>
+
+        <!-- TAB 3: BADGES -->
+        <div id="tab-badges" class="tab-content <?= $activeTab == 'badges' ? 'active' : '' ?>">
+            <div class="card">
+                <div class="card-header">
+                    <h2><i class="fas fa-id-card"></i> Liste des badges</h2>
+                </div>
+                <div class="table-container">
+                    <table class="users-table">
+                        <thead>
+                            <tr>
+                                <th>ID</th>
+                                <th>Propriétaire</th>
+                                <th>Date émission</th>
+                                <th>Date expiration</th>
+                                <th>État</th>
+                                <th>Statut</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <?php foreach ($badges as $badge):
+                                $expiree = strtotime($badge['date_expiration']) < time();
+                            ?>
+                                <tr>
+                                    <td><?= $badge['id_badge'] ?></td>
+                                    <td>
+                                        <strong><?= htmlspecialchars($badge['prenom'] . ' ' . $badge['nom']) ?></strong>
+                                        <br><small><?= $badge['identifiant'] ?></small>
+                                    </td>
+                                    <td><?= date('d/m/Y', strtotime($badge['date_emission'])) ?></td>
+                                    <td>
+                                        <?= date('d/m/Y', strtotime($badge['date_expiration'])) ?>
+                                        <?php if ($expiree): ?>
+                                            <span class="badge badge-expire">Expiré</span>
+                                        <?php endif; ?>
+                                    </td>
+                                    <td>
+                                        <span class="badge badge-<?= $badge['etat'] == 'actif' ? 'actif' : 'inactif' ?>">
+                                            <?= $badge['etat'] ?>
+                                        </span>
+                                    </td>
+                                    <td>
+                                        <?php if ($badge['etat'] == 'actif' && !$expiree): ?>
+                                            <span class="badge badge-actif">✅ Valide</span>
+                                        <?php else: ?>
+                                            <span class="badge badge-inactif">❌ Invalide</span>
+                                        <?php endif; ?>
+                                    </td>
+                                </tr>
+                            <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                </div>
             </div>
         </div>
 
-        <!-- ONGLET 3: AJOUTER UN LIVRE -->
-        <div id="tab-ajout" class="tab-content">
-            <div class="form-ajout">
-                <h2 style="color: #0e1f4c; margin-bottom: 25px; text-align: center;">
-                    Ajouter un nouveau livre
-                </h2>
+        <!-- TAB 4: LIVRES & QR -->
+        <div id="tab-livres" class="tab-content <?= $activeTab == 'livres' ? 'active' : '' ?>">
+            <div class="card">
+                <div class="card-header">
+                    <h2><i class="fas fa-plus"></i> Ajouter un livre avec code barre auto et QR code</h2>
+                </div>
+
+                <div class="badge-info-card">
+                    <strong>ℹ️ Information :</strong> Le code barre est généré automatiquement et unique. QR code optionnel.
+                </div>
 
                 <form method="POST">
-                    <div class="form-group">
-                        <label for="titre">📖 Titre du livre *</label>
-                        <input type="text" id="titre" name="titre" class="form-control"
-                            placeholder="Ex: Le Petit Prince" required>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Titre du livre *</label>
+                            <input type="text" name="titre" class="form-control" placeholder="Ex: Le Petit Prince" required>
+                        </div>
+
+                        <div class="form-group">
+                            <label>État *</label>
+                            <select name="etat" class="form-control" required>
+                                <option value="Neuf">Neuf</option>
+                                <option value="Très bon état">Très bon état</option>
+                                <option value="Bon état">Bon état</option>
+                                <option value="Usé">Usé</option>
+                            </select>
+                        </div>
                     </div>
 
-                    <div class="form-group">
-                        <label for="code_barre">📋 Code barre (ISBN) *</label>
-                        <input type="text" id="code_barre" name="code_barre" class="form-control"
-                            placeholder="Ex: 9782070612758" required>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Cote *</label>
+                            <input type="text" name="cote" class="form-control" placeholder="Ex: A2, B3, C1..." required>
+                            <small>Emplacement dans la bibliothèque</small>
+                        </div>
+
+                        <div class="form-group">
+                            <label>Nombre d'exemplaires</label>
+                            <input type="number" name="stock" class="form-control" value="1" min="1">
+                        </div>
                     </div>
 
-                    <div class="form-group">
-                        <label for="etat">📝 État du livre *</label>
-                        <select id="etat" name="etat" class="form-control" required>
-                            <option value="">Sélectionner un état</option>
-                            <option value="Neuf">Neuf</option>
-                            <option value="Très bon état">Très bon état</option>
-                            <option value="Bon état">Bon état</option>
-                            <option value="Usé">Usé</option>
-                            <option value="Abîmé">Abîmé</option>
-                        </select>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Type de code barre</label>
+                            <select name="type_code" class="form-control">
+                                <option value="auto">Auto (LIV-20250310-00123)</option>
+                                <option value="isbn">Style ISBN (978-2-XXXX-XXXX-X)</option>
+                                <option value="simple">Simple (BC + timestamp)</option>
+                            </select>
+                            <small>Format du code barre généré automatiquement</small>
+                        </div>
+
+                        <div class="form-group form-check">
+                            <input type="checkbox" name="generer_qr" id="generer_qr" checked>
+                            <label for="generer_qr">Générer un QR code</label>
+                        </div>
                     </div>
 
-                    <div class="form-group">
-                        <label for="cote">🏷️ Cote de rangement *</label>
-                        <input type="text" id="cote" name="cote" class="form-control"
-                            placeholder="Ex: A2, B3, C1..." required>
-                        <small style="color: #666;">Système de classement en bibliothèque</small>
-                    </div>
-
-                    <div class="form-group">
-                        <label for="stock">📚 Nombre d'exemplaires *</label>
-                        <input type="number" id="stock" name="stock" class="form-control"
-                            min="1" value="1" required>
-                        <small style="color: #666;">Nombre d'exemplaires à ajouter au stock</small>
-                    </div>
-
-                    <button type="submit" name="ajouter_ouvrage" class="btn-submit">
-                        ➕ Ajouter le livre
+                    <button type="submit" name="ajouter_livre" class="btn btn-success" style="width: 100%; padding: 15px;">
+                        <i class="fas fa-magic"></i> Générer le code barre et ajouter le livre
                     </button>
                 </form>
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <h2><i class="fas fa-qrcode"></i> Livres avec codes barres et QR codes</h2>
+                </div>
+
+                <div class="grid-2">
+                    <?php foreach ($livres as $livre):
+                        $qr_filename = 'livre_' . $livre['id_ouvrage'] . '_' . preg_replace('/[^a-zA-Z0-9]/', '_', $livre['code_barre']) . '.png';
+                        $qr_path = '../assets/qr_codes/' . $qr_filename;
+                        $qr_exists = file_exists($qr_path);
+                        $qr_url = $qr_exists ? '../assets/qr_codes/' . $qr_filename : "https://chart.googleapis.com/chart?chs=150x150&cht=qr&chl=" . urlencode($livre['code_barre']);
+                    ?>
+                        <div class="card" style="padding: 15px;">
+                            <h3 style="color: #0e1f4c; margin-bottom: 10px;"><?= htmlspecialchars($livre['titre']) ?></h3>
+
+                            <div style="margin-bottom: 15px;">
+                                <span class="badge badge-code-barre">
+                                    <i class="fas fa-barcode"></i> <?= htmlspecialchars($livre['code_barre']) ?>
+                                </span>
+                            </div>
+
+                            <p><strong>Cote:</strong> <?= $livre['cote'] ?></p>
+                            <p><strong>État:</strong> <?= $livre['etat'] ?></p>
+                            <p><strong>Stock:</strong> <?= $livre['total_stock'] - $livre['total_reserver'] ?> dispo / <?= $livre['total_stock'] ?> total</p>
+
+                            <div class="qr-code-container">
+                                <img src="<?= $qr_url ?>" alt="QR Code" class="qr-code-image"
+                                    onerror="this.src='https://chart.googleapis.com/chart?chs=150x150&cht=qr&chl=<?= urlencode($livre['code_barre']) ?>'">
+
+                                <div class="qr-code-actions">
+                                    <?php if ($qr_exists): ?>
+                                        <a href="<?= $qr_path ?>" download="<?= $qr_filename ?>" class="btn btn-sm btn-success">
+                                            <i class="fas fa-download"></i> QR
+                                        </a>
+                                        <button onclick="printQR('<?= $qr_path ?>', '<?= addslashes($livre['titre']) ?>')" class="btn btn-sm btn-info">
+                                            <i class="fas fa-print"></i> Imprimer
+                                        </button>
+                                    <?php endif; ?>
+
+                                    <form method="POST" style="display: inline;">
+                                        <input type="hidden" name="id_ouvrage" value="<?= $livre['id_ouvrage'] ?>">
+                                        <input type="hidden" name="code_barre" value="<?= $livre['code_barre'] ?>">
+                                        <input type="hidden" name="titre" value="<?= htmlspecialchars($livre['titre']) ?>">
+                                        <button type="submit" name="generer_qr_livre" class="btn btn-sm btn-primary">
+                                            <?= $qr_exists ? '🔄 Régénérer QR' : '➕ Générer QR' ?>
+                                        </button>
+                                    </form>
+
+                                    <form method="POST" style="display: inline;" onsubmit="return confirm('Régénérer le code barre ? Cette action modifiera le QR code associé.')">
+                                        <input type="hidden" name="id_ouvrage" value="<?= $livre['id_ouvrage'] ?>">
+                                        <input type="hidden" name="ancien_code" value="<?= $livre['code_barre'] ?>">
+                                        <button type="submit" name="regenerer_code_barre" class="btn btn-sm btn-warning">
+                                            <i class="fas fa-sync-alt"></i> Nouveau code
+                                        </button>
+                                    </form>
+                                </div>
+                            </div>
+
+                            <div style="font-size: 11px; color: #666; text-align: center; margin-top: 5px;">
+                                Scan QR pour trouver ce livre
+                            </div>
+                        </div>
+                    <?php endforeach; ?>
+                </div>
+            </div>
+        </div>
+
+        <!-- TAB 5: CLASSES -->
+        <div id="tab-classes" class="tab-content <?= $activeTab == 'classes' ? 'active' : '' ?>">
+            <div class="card">
+                <div class="card-header">
+                    <h2><i class="fas fa-school"></i> Liste des classes</h2>
+                </div>
+                <div class="table-container">
+                    <table class="users-table">
+                        <thead>
+                            <tr>
+                                <th>ID</th>
+                                <th>Libellé</th>
+                                <th>Nombre d'élèves</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <?php foreach ($classes as $classe):
+                                $nb_eleves = 0;
+                                foreach ($utilisateurs as $user) {
+                                    if ($user['id_classe'] == $classe['id_classe'] && $user['id_statut'] == 4) {
+                                        $nb_eleves++;
+                                    }
+                                }
+                            ?>
+                                <tr>
+                                    <td><?= $classe['id_classe'] ?></td>
+                                    <td><strong><?= htmlspecialchars($classe['libelle']) ?></strong></td>
+                                    <td><?= $nb_eleves ?> élève(s)</td>
+                                    <td>
+                                        <a href="edt.php?classe=<?= $classe['id_classe'] ?>" class="btn btn-sm btn-info">
+                                            <i class="fas fa-calendar"></i> Voir EDT
+                                        </a>
+                                    </td>
+                                </tr>
+                            <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                </div>
             </div>
         </div>
     </div>
 
+    <!-- MODAL POUR CRÉER UN BADGE -->
+    <div id="modalCreerBadge" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3><i class="fas fa-id-card"></i> Créer un badge</h3>
+                <button class="modal-close" onclick="fermerModal()">×</button>
+            </div>
+            <div class="badge-info-card">
+                <strong>ℹ️ Information :</strong> Le badge sera créé avec une validité de 2 ans.
+            </div>
+            <form method="POST" id="formBadge">
+                <input type="hidden" name="id_utilisateur" id="badgeUserId">
+                <p style="text-align: center; margin: 20px 0;">
+                    Valide du <?= date('d/m/Y') ?> au <?= date('d/m/Y', strtotime('+2 years')) ?>
+                </p>
+                <div style="display: flex; gap: 10px; justify-content: center;">
+                    <button type="button" class="btn btn-warning" onclick="fermerModal()">
+                        <i class="fas fa-times"></i> Annuler
+                    </button>
+                    <button type="submit" name="creer_badge" class="btn btn-success">
+                        <i class="fas fa-check"></i> Créer le badge
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
     <script>
+        // Navigation par onglets
         function showTab(tabName) {
-            // Masquer tous les onglets
-            document.querySelectorAll('.tab-content').forEach(tab => {
-                tab.style.display = 'none';
-                tab.classList.remove('active');
-            });
+            const url = new URL(window.location.href);
+            url.searchParams.set('tab', tabName);
+            url.searchParams.delete('edit');
+            window.location.href = url.toString();
+        }
 
-            // Désactiver tous les boutons d'onglet
-            document.querySelectorAll('.tab').forEach(tab => {
-                tab.classList.remove('active');
-            });
+        // Modal de création de badge
+        function creerBadgeModal(userId) {
+            document.getElementById('badgeUserId').value = userId;
+            document.getElementById('modalCreerBadge').style.display = 'flex';
+        }
 
-            // Afficher l'onglet sélectionné
-            const activeTab = document.getElementById('tab-' + tabName);
-            if (activeTab) {
-                activeTab.style.display = 'block';
-                activeTab.classList.add('active');
+        function fermerModal() {
+            document.getElementById('modalCreerBadge').style.display = 'none';
+        }
+
+        // Impression de QR code
+        function printQR(qrUrl, titre) {
+            const printWindow = window.open('', '_blank');
+            printWindow.document.write(`
+                <html>
+                <head><title>QR Code - ${titre}</title></head>
+                <body style="text-align: center; padding: 20px; font-family: Arial;">
+                    <h2 style="color: #0e1f4c;">${titre}</h2>
+                    <img src="${qrUrl}" style="max-width: 300px; border: 2px solid #ddd; padding: 10px; margin: 20px;">
+                    <p style="margin-bottom: 30px;">Scanner ce QR code pour trouver le livre rapidement</p>
+                    <button onclick="window.print()" style="padding: 10px 20px; background: #0e1f4c; color: white; border: none; border-radius: 5px; cursor: pointer;">
+                        🖨️ Imprimer
+                    </button>
+                </body>
+                </html>
+            `);
+        }
+
+        // Fermer le modal en cliquant à l'extérieur
+        window.onclick = function(event) {
+            const modal = document.getElementById('modalCreerBadge');
+            if (event.target == modal) {
+                fermerModal();
             }
-
-            // Activer le bouton de l'onglet
-            event.target.classList.add('active');
         }
-
-        function confirmEmprunt() {
-            const dateLimite = new Date();
-            dateLimite.setDate(dateLimite.getDate() + 14);
-            const dateFormat = dateLimite.toLocaleDateString('fr-FR');
-
-            return confirm(`Confirmer l'emprunt de ce livre ?\n\n📅 Date limite de retour : ${dateFormat}\n⏱️ Durée : 14 jours maximum`);
-        }
-
-        function confirmReservation() {
-            return confirm("Réserver ce livre ?\n\nIl sera mis de côté pour vous.");
-        }
-
-        function confirmAnnulation() {
-            return confirm("Annuler la réservation de ce livre ?\n\nIl redeviendra disponible pour les autres.");
-        }
-
-        // Afficher une notification si des prêts sont en retard
-        window.onload = function() {
-            const retardCount = <?= $stats['prets_en_retard'] ?? 0 ?>;
-            const livresReserves = <?= $stats['livres_reserves'] ?? 0 ?>;
-
-            if (retardCount > 0) {
-                setTimeout(() => {
-                    alert(`⚠️ Attention : ${retardCount} prêt(s) sont en retard !\nVeuillez vérifier l'onglet "Prêts en cours".`);
-                }, 1000);
-            }
-
-            if (livresReserves > 0) {
-                console.log(`ℹ️ ${livresReserves} livre(s) sont actuellement réservés.`);
-            }
-        };
     </script>
 </body>
 

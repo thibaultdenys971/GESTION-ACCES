@@ -377,7 +377,7 @@ $current_day_fr = $french_days[$current_day] ?? $current_day;
         <div class="welcome-header">
             <div class="welcome-text">
                 <h1>👋 Bienvenue, <?= htmlspecialchars($user_info['prenom'] . ' ' . $user_info['nom']) ?> !</h1>
-                <p>Heureux de vous revoir sur votre tableau de bord AGTI SAV. Voici un aperçu de vos activités et statistiques.</p>
+                <p>Heureux de vous revoir sur votre tableau de bord.</p>
             </div>
             <div class="date-info">
                 <div class="day"><?= $current_day_fr ?></div>

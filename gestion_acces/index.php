@@ -52,10 +52,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             header("Location: pages/accueil.php");
                             break;
                         case 2:
-                            header("Location: pages/technicien.php");
-                            break;
+                            header("Location: pages/accueil.php");                 break;
                         default:
-                            header("Location: pages/edt.php");
+                            header("Location: pages/accueil.php");
                             break;
                     }
                     exit();

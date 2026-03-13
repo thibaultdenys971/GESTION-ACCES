@@ -26,8 +26,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajouter_eleve'])) {
         
         // 1. Créer l'utilisateur (statut 4 = Élève)
         $userStmt = $conn->prepare("
-            INSERT INTO utilisateur (nom, prenom, identifiant, mot_de_pass, id_statut, id_classe, peut_se_connectert) 
-            VALUES (?, ?, ?, ?, 4, ?, 0)
+            INSERT INTO utilisateur (nom, prenom, id_statut, id_classe, peut_se_connectert) 
+            VALUES (?, ?, 4, ?, 0)
         ");
         $userStmt->execute([$nom, $prenom, $identifiant, $mot_de_pass, $id_classe]);
         $id_utilisateur = $conn->lastInsertId();
@@ -796,21 +796,6 @@ $stats = $statsStmt->fetch(PDO::FETCH_ASSOC);
                         </div>
                     </div>
                     
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label for="identifiant">Identifiant de connexion *</label>
-                            <input type="text" id="identifiant" name="identifiant" class="form-control" 
-                                   placeholder="Ex: jean.dupont" required>
-                            <small style="color: #666;">Utilisé pour se connecter au système</small>
-                        </div>
-                        
-                        <div class="form-group">
-                            <label for="mot_de_pass">Mot de passe *</label>
-                            <input type="password" id="mot_de_pass" name="mot_de_pass" class="form-control" 
-                                   placeholder="●●●●●●●●" required minlength="6">
-                            <small style="color: #666;">Minimum 6 caractères</small>
-                        </div>
-                    </div>
                     
                     <div class="form-group">
                         <label for="id_classe">Classe *</label>
