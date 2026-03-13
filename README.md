@@ -200,24 +200,24 @@
 <h3>2.2 Structure MVC simplifiée</h3>
 <pre>
 gestion_acces/
-├── index.php                  # Point d'entrée (connexion)
-├── includes/                  # Fichiers d'inclusion
-│   ├── db.php                # Connexion BDD + fonction logs
-│   └── sidebar.php           # Menu latéral
-├── pages/                     # Pages de l'application
-│   ├── accueil.php           # Tableau de bord
-│   ├── admin.php              # Gestion des élèves
-│   ├── admin_global.php       # ⭐ NOUVEAU - Administration globale
-│   ├── edt.php                # Emploi du temps
-│   ├── preappel.php           # Système d'appel
-│   ├── logs.php               # Journal des accès
-│   ├── gestion_edt.php        # Admin - Gestion EDT
-│   ├── gestion_bibliotheque.php # Gestion bibliothèque avec QR
-│   └── *.php                  # Autres pages
-├── assets/                    # Ressources statiques
-│   └── css/                   # Feuilles de style
-│       ├── style.css          # Style global
-│       └── img/                # Images
+├── index.php                  
+├── includes/                  
+│   ├── db.php                
+│   └── sidebar.php           
+├── pages/                     
+│   ├── accueil.php           
+│   ├── admin.php              
+│   ├── admin_global.php       
+│   ├── edt.php              
+│   ├── preappel.php           
+│   ├── logs.php             
+│   ├── gestion_edt.php        
+│   ├── gestion_bibliotheque.php 
+│   └── *.php                
+├── assets/                    
+│   └── css/                 
+│       ├── style.css          
+│       └── img/                
 </pre>
 
 <!-- 3. BASE DE DONNÉES -->
@@ -232,7 +232,7 @@ gestion_acces/
         <th>Relations</th>
     </tr>
     <tr>
-        <td><code>utilisateur</code></td>
+        <td><code>utilisateurs</code></td>
         <td>Stocke tous les utilisateurs</td>
         <td>→ statut, classe, badge</td>
     </tr>
