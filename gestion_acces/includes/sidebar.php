@@ -203,9 +203,7 @@ $current_page = basename($_SERVER['PHP_SELF']);
                 <a href="admin_global.php" class="<?= $current_page == 'admin_global.php' ? 'active' : '' ?>">
                     <i>👑</i> <span class="link-text">Administration Globale</span>
                 </a>
-                <a href="gestion_utilisateurs.php" class="<?= $current_page == 'gestion_utilisateurs.php' ? 'active' : '' ?>">
-                    <i>👥</i> <span class="link-text">Gestion Utilisateurs</span>
-                </a>
+
                 <a href="gestion_edt.php" class="<?= $current_page == 'gestion_edt.php' ? 'active' : '' ?>">
                     <i>⚙️</i> <span class="link-text">Gestion EDT</span>
                 </a>
